@@ -1,0 +1,78 @@
+[package]
+name = "doccode"
+version = "0.1.0"
+edition = "2021"
+description = "Local desktop app that generates interactive HTML documentation from source code using a local LLM"
+readme = "README.md"
+publish = false
+
+[dependencies]
+# GUI framework
+iced = { version = "0.13", features = ["tokio"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1"
+toml = "0.8"
+
+# Code parsing (tree-sitter)
+tree-sitter = "0.24"
+streaming-iterator = "0.1"
+tree-sitter-python = "0.23"
+tree-sitter-rust = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-html = "0.23"
+tree-sitter-css = "0.23"
+
+# File walking
+walkdir = "2"
+
+# Hashing
+blake3 = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Async traits for AiClient (object safety)
+async-trait = "0.1"
+
+# i18n: переводы UI из locales/*.yml, вшиваются в бинарь на этапе компиляции
+rust-i18n = "3"
+
+# Vector database (Qdrant Edge, встраиваемый режим) — под фичей `qdrant`.
+# Включена по умолчанию; для лёгкой сборки без Qdrant:
+# `cargo run --no-default-features` (тогда используется in-memory стор).
+qdrant-edge = { version = "0.8", optional = true }
+
+# Directory handling
+dirs = "5"
+
+# Theme detection (light/dark) from the operating system
+dark-light = "1"
+
+# Native folder picker for project and documentation paths
+rfd = "0.17"
+
+[features]
+# Qdrant Edge — основной векторный индекс документации. Отключить можно так:
+# `cargo run --no-default-features` (тогда используется in-memory стор).
+default = ["qdrant"]
+qdrant = ["dep:qdrant-edge"]
+
+# Сборка: иконка .ico + данные версии в PE-ресурсах exe (см. build.rs).
+# Крейт кроссплатформенный: на не-Windows хостах использует windres из binutils.
+[build-dependencies]
+winresource = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = true

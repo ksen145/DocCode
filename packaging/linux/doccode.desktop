@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=DocCode
+GenericName=Documentation Generator
+GenericName[ru]=Генератор документации
+Comment=Generates documentation for your codebase
+Comment[ru]=Генерирует документацию для вашего кода
+Exec=doccode
+Icon=doccode
+Terminal=false
+Categories=Development;
+Keywords=docs;documentation;api;code;reference;
+Keywords[ru]=документация;доки;api;код;справочник;
+StartupNotify=true
+StartupWMClass=doccode
