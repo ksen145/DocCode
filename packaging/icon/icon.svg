@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Векторный мастер иконки DocCode (для hicolor/scalable, документации, веба).
+  Геометрия повторяет packaging/icon/make_icon.py: лист, знак </> и строки текста.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#11286B"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.23"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#E9F0FF"/>
+    </linearGradient>
+    <filter id="sheetShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="16" stdDeviation="13" flood-color="#060F2D" flood-opacity="0.55"/>
+    </filter>
+    <clipPath id="rounded">
+      <rect x="0" y="0" width="1024" height="1024" rx="224" ry="224"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#rounded)">
+    <rect width="1024" height="1024" fill="url(#bg)"/>
+    <rect width="1024" height="460" fill="url(#gloss)"/>
+  </g>
+
+  <rect x="282" y="190" width="460" height="644" rx="48" ry="48"
+        fill="url(#paper)" filter="url(#sheetShadow)"/>
+
+  <!-- знак </> -->
+  <g fill="none" stroke="#1D4ED8" stroke-width="36"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 432.8 292.8 L 360.8 372 L 432.8 451.2"/>
+    <path d="M 477.8 463.1 L 546.2 280.9"/>
+    <path d="M 591.2 292.8 L 663.2 372 L 591.2 451.2"/>
+  </g>
+
+  <!-- строки текста -->
+  <g fill="#8FA3C2">
+    <rect x="342" y="528" width="340" height="34" rx="17" ry="17"/>
+    <rect x="342" y="602" width="360" height="34" rx="17" ry="17"/>
+    <rect x="342" y="676" width="318" height="34" rx="17" ry="17"/>
+    <rect x="342" y="750" width="278" height="34" rx="17" ry="17"/>
+  </g>
+</svg>
