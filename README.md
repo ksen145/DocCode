@@ -1,111 +1,178 @@
-# DocCode
+<p align="center">
+  <img src="assets/banner.svg" alt="DocCode — interactive HTML documentation from source code" width="100%">
+</p>
 
-Локальное десктопное приложение для генерации документации по исходному коду.
-На выходе — **один самодостаточный `index.html`** с обзором проекта, деревом
-компонентов и файлов, поиском и статусами проверки качества.
+<p align="center">
+  <b>English</b> ·
+  <a href="README.ru.md">Русский</a>
+</p>
 
-Код не отправляется модели целиком: проект сканируется, режется на смысловые
-фрагменты, индексируется в локальной векторной базе, и в промпт попадают только
-релевантные фрагменты. Работа с LLM идёт через
-[Ollama](https://ollama.com/): по умолчанию сервер локальный, и исходники не
-покидают машину.
+<p align="center">
+  <a href="https://github.com/ksen145/DocCode/releases"><img src="https://img.shields.io/github/v/release/ksen145/DocCode?style=flat-square&label=release&color=2563EB" alt="Release"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0F172A?style=flat-square" alt="Platforms">
+  <img src="https://img.shields.io/badge/Rust-stable-DEA584?style=flat-square&logo=rust&logoColor=white" alt="Rust stable">
+  <img src="https://img.shields.io/badge/LLM-Ollama-111827?style=flat-square" alt="Ollama">
+  <img src="https://img.shields.io/badge/output-single%20index.html-16A34A?style=flat-square" alt="Single index.html">
+  <img src="https://img.shields.io/badge/privacy-100%25%20local-0EA5E9?style=flat-square" alt="100% local">
+</p>
 
-## Возможности
+<p align="center">
+  <i>A local desktop app that turns a codebase into one self-contained, interactive HTML documentation site.</i>
+</p>
 
-- Анализ проектов на Python, Rust, JavaScript, TypeScript, HTML и CSS через
-  tree-sitter.
-- Векторный индекс кода: Qdrant Edge (встроенный, без отдельного сервера) или
-  in-memory fallback.
-- LLM строит план компонентов и пишет документацию по каждому компоненту,
-  опираясь на найденный векторный контекст.
-- Контроль качества моделью D1: фактическая точность и полнота, с настраиваемыми
-  порогами и повторами.
-- Единый `index.html` без внешних зависимостей и сетевых запросов:
-  - обзор проекта и точки входа;
-  - иерархия компонентов и файлов;
-  - поиск по компонентам, файлам и сущностям;
-  - хлебные крошки и hash-маршруты;
-  - блоки кода с копированием `path:line` и переходом в VS Code;
-  - бейджи и таблица качества D1;
-  - светлая и тёмная темы с сохранением выбора.
-- Русский и английский интерфейс; язык влияет и на язык сгенерированной
-  документации.
-- Тема приложения по умолчанию берётся из операционной системы; явный выбор
-  светлой или тёмной темы сохраняется в конфигурации.
-- Папки проекта и документации выбираются через системный диалог, без ручного
-  ввода пути.
+---
 
-## Как это работает
+**DocCode** scans your project, splits it into meaningful fragments, indexes them
+in a local vector store, and asks a local LLM for documentation built strictly on
+the retrieved context. The result is a **single `index.html`** — project overview,
+component and file tree, search, and quality statuses, with no external
+dependencies and no network requests.
 
-1. **Сканирование** — обход файлов поддерживаемых языков, нормализация путей.
-2. **Индексация** — извлечение сущностей, чанки, эмбеддинги Ollama и запись
-   векторов в Qdrant Edge.
-3. **План** — LLM получает список файлов и векторную выборку и возвращает JSON
-   с деревом компонентов, точками входа и общим обзором.
-4. **Генерация** — для каждого компонента LLM пишет Markdown по строгому
-   шаблону; D1 проверяет факты и полноту.
-5. **Финализация** — детерминированный рендер `index.html`.
+> [!NOTE]
+> Only relevant fragments are sent to the model, never the whole repository.
+> All requests go to the Ollama endpoint you configure — by default a local
+> server, so your sources never leave the machine.
 
-D1 — отдельная модель Ollama (`/v1/systemone`), которая отвечает на
-типизированные вопросы о документе. Проверка отключается в настройках проекта;
-не прошедшие порог документы помечаются `needs_review`, а не считаются ошибкой.
+## Features
 
-## Требования
+| | Capability | What you get |
+| --- | --- | --- |
+| 🔍 | **Multi-language analysis** | Python, Rust, JavaScript, TypeScript, HTML and CSS parsed with tree-sitter |
+| 🧠 | **Vector code index** | Qdrant Edge embedded (no separate server) or an in-memory fallback |
+| ✍️ | **LLM-written docs** | A component plan plus per-component Markdown grounded in retrieved context |
+| ✅ | **D1 quality gate** | Factual accuracy and completeness scored by a model, with configurable thresholds and retries |
+| 📦 | **One output file** | `index.html` with overview, entry points, component tree, search, breadcrumbs and hash routes |
+| 🎨 | **Light and dark themes** | Theme follows the OS by default; an explicit choice is persisted |
+| 🌐 | **Bilingual UI** | Russian and English interface; the language also drives the docs language |
+| 💻 | **Native UX** | Project and documentation folders picked with the system dialog, launch to VS Code from code blocks |
 
-- Rust stable (edition 2021).
-- Windows 10/11 или Linux с графической средой; macOS отдельно не проверялся.
-- Запущенный Ollama и установленные модели.
+## How it works
 
-Рекомендуемый набор для Ollama:
-
-```bash
-ollama pull gemma4:e4b        # генерация документации
-ollama pull nomic-embed-text  # эмбеддинги для векторного индекса
-ollama pull d1                # контроль качества (необязательно)
+```mermaid
+flowchart TD
+    S["Source tree"] --> A["1 · Scan<br/>walk supported files, normalize paths"]
+    A --> B["2 · Index<br/>entities, chunks, Ollama embeddings → Qdrant Edge"]
+    B --> C["3 · Plan<br/>LLM returns component tree, entry points, overview"]
+    C --> D["4 · Generate<br/>per-component Markdown from retrieved context"]
+    D --> E["5 · Finalize<br/>deterministic HTML render"]
+    E --> R["index.html<br/>single file, no network calls"]
 ```
 
-Если модели D1 нет, отключите проверку в настройках — документация будет
-помечена как непроверенная.
+1. **Scan** — walk files of supported languages and normalize paths.
+2. **Index** — extract entities, build chunks, embed them through Ollama, store vectors in Qdrant Edge.
+3. **Plan** — the LLM receives the file list and a vector selection, and returns JSON with the component tree, entry points and a project overview.
+4. **Generate** — for each component the LLM writes Markdown from a strict template; D1 checks facts and completeness.
+5. **Finalize** — deterministic render of `index.html`.
 
-## Быстрый старт
+D1 is a separate Ollama model (`/v1/systemone`) that answers typed questions about a
+document. The check can be disabled in project settings; documents below the
+threshold are marked `needs_review` instead of failing the run.
+
+## What the generated site includes
+
+| Section | Details |
+| --- | --- |
+| **Overview** | Project summary and entry points |
+| **Structure** | Component hierarchy and file tree |
+| **Search** | Across components, files and entities |
+| **Navigation** | Breadcrumbs and hash routes, copyable `path:line`, jump to VS Code |
+| **Quality** | D1 badges and a quality table |
+| **Theming** | Light and dark themes, choice persisted |
+
+## Requirements
+
+- Rust stable (edition 2021) — only if you build from source.
+- Windows 10/11 or Linux with a graphical environment; macOS has not been tested separately.
+- A running [Ollama](https://ollama.com/) instance with the models pulled.
+
+| Model | Purpose | Required |
+| --- | --- | --- |
+| `gemma4:e4b` | Documentation generation | Yes |
+| `nomic-embed-text` | Embeddings for the vector index | Yes |
+| `d1` | Quality control | No |
+
+```bash
+ollama pull gemma4:e4b
+ollama pull nomic-embed-text
+ollama pull d1
+```
+
+If the D1 model is missing, disable the check in settings — generated docs are then
+marked as unverified.
+
+## Quick start
+
+**Prebuilt packages** are published on the [Releases](https://github.com/ksen145/DocCode/releases)
+page: a Windows installer and `.deb`/AppImage builds for Linux.
+
+Build and run from source:
 
 ```bash
 cargo run --release
 ```
 
-Release-сборка для Windows запускается без консольного окна; в debug-режиме
-консоль остаётся для логов.
+Release builds on Windows start without a console window; debug builds keep the
+console for logs.
 
-В приложении:
+In the app:
 
-1. Выберите корень проекта и папку для документации через системный диалог
-   (по умолчанию — `docs/` внутри проекта).
-2. Настройте Ollama: URL, модель генерации, модель эмбеддингов и модель D1.
-3. При необходимости измените `temperature`, `max_tokens`, пороги D1 и число
-   повторов.
-4. Нажмите «Сгенерировать» и дождитесь завершения стадий
-   **Сканирование → Индексация → План → Генерация → Финализация**.
-5. Откройте созданный `index.html`.
+1. Pick the project root and the documentation folder with the system dialog
+   (default is `docs/` inside the project).
+2. Configure Ollama: URL, generation model, embeddings model and D1 model.
+3. Optionally adjust `temperature`, `max_tokens`, D1 thresholds and retry count.
+4. Press **Generate** and follow the stages:
+   **Scan → Index → Plan → Generate → Finalize**.
+5. Open the produced `index.html`.
 
-Сборка без Qdrant (in-memory индекс, удобно для проверки и отладки):
+<details>
+<summary><b>Lightweight build without Qdrant</b></summary>
+
+Uses the in-memory vector store — handy for smoke tests and debugging:
 
 ```bash
 cargo run --no-default-features
 ```
 
-## Где хранятся данные
+</details>
 
-| Что | Где |
+## Examples
+
+| Command | What it does |
 | --- | --- |
-| Конфигурация | `config.toml` в системном каталоге конфигурации (`%APPDATA%\doccode` на Windows, `~/.config/doccode` на Linux) |
-| Промпты | `prompts.yaml` рядом с конфигурацией; при отсутствии используются встроенные |
-| Векторный индекс | системный cache-каталог, `doccode/projects/<hash>/index` |
-| Результат | выбранная папка, файл `index.html` |
+| `cargo run --example ollama_smoke -- http://localhost:11434 gemma4:e4b` | Check connectivity to Ollama |
+| `cargo run --example analyze_project -- .` | Analyse a project without an LLM |
+| `cargo run --example render_site_demo -- ./demo-site` | Render a demo site without an LLM (layout and JS) |
+| `cargo run --example site_e2e -- <project> gemma4:e4b <docs>` | Full pipeline without the GUI |
 
-Индекс пересобирается при каждом запуске. Исходный код и результаты не
-загружаются в облако: сетевые запросы идут только на указанный адрес Ollama.
+<details>
+<summary><b>Running without the D1 check</b></summary>
 
-## Сборка и тесты
+```bash
+DOCCODE_D1=0 cargo run --example site_e2e -- <project>
+```
+
+On Windows:
+
+```powershell
+$env:DOCCODE_D1 = "0"
+cargo run --example site_e2e -- <project>
+```
+
+</details>
+
+## Data locations
+
+| What | Where |
+| --- | --- |
+| Configuration | `config.toml` in the system config directory (`%APPDATA%\doccode` on Windows, `~/.config/doccode` on Linux) |
+| Prompts | `prompts.yaml` next to the config; built-in prompts are used when absent |
+| Vector index | system cache directory, `doccode/projects/<hash>/index` |
+| Result | the chosen folder, `index.html` |
+
+The index is rebuilt on every run. Source code and results are never uploaded:
+network requests go only to the configured Ollama address.
+
+## Build and test
 
 ```bash
 cargo fmt --all --check
@@ -114,82 +181,55 @@ cargo test
 cargo test --no-default-features
 ```
 
-## Примеры
-
-Проверка связи с Ollama:
-
-```bash
-cargo run --example ollama_smoke -- http://localhost:11434 gemma4:e4b
-```
-
-Анализ проекта без LLM:
-
-```bash
-cargo run --example analyze_project -- .
-```
-
-Демонстрационный сайт без LLM (проверка вёрстки и JS):
-
-```bash
-cargo run --example render_site_demo -- ./demo-site
-```
-
-Полный прогон пайплайна без GUI:
-
-```bash
-cargo run --example site_e2e -- <путь_к_проекту> gemma4:e4b <папка_docs>
-
-# без проверки D1
-DOCCODE_D1=0 cargo run --example site_e2e -- <путь_к_проекту>
-```
-
-На Windows переменная задаётся так:
-
-```powershell
-$env:DOCCODE_D1 = "0"
-cargo run --example site_e2e -- <путь_к_проекту>
-```
-
-## Структура проекта
+## Project layout
 
 ```text
 src/
-├── ai/           # Ollama-клиент, контракт D1, абстракция AiClient
-├── app/          # состояние GUI и стадии пайплайна
-├── core/         # сканер, tree-sitter парсеры, модель проекта
-├── docs/         # чанки и retrieval, план, генерация, HTML-рендер
-├── index/        # Qdrant Edge и in-memory векторное хранилище
-├── prompts/      # YAML-схема, шаблоны и подстановка переменных
-├── ui/           # экраны iced, тема, i18n
-├── config.rs     # конфигурация приложения
+├── ai/           # Ollama client, D1 contract, AiClient abstraction
+├── app/          # GUI state and pipeline stages
+├── core/         # scanner, tree-sitter parsers, project model
+├── docs/         # chunks and retrieval, plan, generation, HTML render
+├── index/        # Qdrant Edge and in-memory vector stores
+├── prompts/      # YAML schema, templates, variable substitution
+├── ui/           # iced screens, theme, i18n
+├── config.rs     # application configuration
 ├── lib.rs
 └── main.rs
 
-locales/          # ru/en переводы интерфейса
-packaging/        # иконки, NSIS-установщик, deb/AppImage, Docker
-examples/         # запускаемые примеры
-tests/            # интеграционные тесты
-prompts.yaml      # встроенные промпты (переопределяются пользовательским файлом)
+assets/           # README banner
+locales/          # ru/en UI translations
+packaging/        # icons, NSIS installer, deb/AppImage, Docker
+examples/         # runnable examples
+tests/            # integration tests
+prompts.yaml      # built-in prompts (overridden by a user file)
 ```
 
-## Ограничения
+## Limitations
 
-- Поддерживается только Ollama; другие OpenAI-совместимые бэкенды пока не
-  подключены.
-- Эмбеддинги считаются последовательно — на больших проектах индексация
-  занимает заметное время.
-- Инкрементального обновления индекса нет: он пересобирается целиком.
-- D1 — консервативный фильтр: `needs_review` означает необходимость ручной
-  проверки, а не сбой генерации.
-- Оболочка сгенерированного сайта пока локализована на русский; выбранный язык
-  влияет на язык документации.
+- Only Ollama is supported; other OpenAI-compatible backends are not wired up yet.
+- Embeddings are computed sequentially, so indexing large projects takes noticeable time.
+- There is no incremental index update: the index is rebuilt in full.
+- D1 is a conservative filter: `needs_review` means manual review is advised, not that generation failed.
+- The generated site shell is currently localized in Russian; the selected language affects the documentation language.
+- macOS is not verified.
 
-## Упаковка
+## Packaging
 
-Инструкции по сборке иконок, установщика Windows и пакетов Linux — в
+Instructions for icons, the Windows installer and Linux packages live in
 [`packaging/README.md`](packaging/README.md).
 
-```bash
-# всё сразу: иконки + Windows + Linux (Linux собирается в Docker)
+```powershell
+# everything at once: icons + Windows + Linux (Linux is built in Docker)
 powershell -File packaging/build-release.ps1
 ```
+
+---
+
+<p align="center">
+  <sub>Built with Rust · iced · tree-sitter · Qdrant Edge · Ollama</sub>
+</p>
+
+<p align="center">
+  <a href="README.md">English</a> ·
+  <a href="README.ru.md">Русский</a>
+</p>
