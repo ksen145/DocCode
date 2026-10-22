@@ -14,7 +14,7 @@ pub struct Prompt {
 
 /// Конфигурация промптов.
 ///
-/// `temperature` и `max_tokens` намеренно отсутствуют: это параметры
+/// `temperature`, `max_tokens` и `think` намеренно отсутствуют: это параметры
 /// приложения, а не шаблонов.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromptsConfig {

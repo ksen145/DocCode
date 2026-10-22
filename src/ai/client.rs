@@ -175,21 +175,24 @@ pub struct Usage {
     pub completion_tokens: u32,
 }
 
-/// Параметры генерации (defaults из prompts.yaml → запрос к LLM).
+/// Параметры генерации (из настроек приложения → запрос к LLM).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct GenerateOptions {
     /// Температура сэмплирования (0.0–2.0); `None` — значение бэкенда.
     pub temperature: Option<f32>,
     /// Ограничение длины ответа в токенах; `None` — значение бэкенда.
     pub max_tokens: Option<u32>,
+    /// Разрешить reasoning (`think` в Ollama); `None` — значение модели.
+    pub think: Option<bool>,
 }
 
 impl GenerateOptions {
-    /// Оба параметра заданы.
+    /// Параметры сэмплирования; `think` остаётся на усмотрение модели.
     pub fn new(temperature: f32, max_tokens: u32) -> Self {
         Self {
             temperature: Some(temperature),
             max_tokens: Some(max_tokens),
+            think: None,
         }
     }
 }

@@ -648,6 +648,7 @@ fn generation_options(config: &SiteConfig) -> GenerateOptions {
     GenerateOptions {
         temperature: Some(config.generation.temperature),
         max_tokens: Some(config.generation.max_tokens),
+        think: Some(config.generation.think),
     }
 }
 

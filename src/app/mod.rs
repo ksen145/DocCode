@@ -89,6 +89,8 @@ pub struct App {
     pub ai_temperature: String,
     /// Максимум токенов ответа (строка поля ввода).
     pub ai_max_tokens: String,
+    /// Разрешить модели рассуждать перед ответом (`think`).
+    pub ai_think: bool,
     /// Порог фактической точности D1.
     pub ai_d1_min_factuality: String,
     /// Порог полноты D1.
@@ -158,6 +160,7 @@ impl Default for App {
             ai_d1_model: ai.d1_model.clone(),
             ai_temperature: generation.temperature.to_string(),
             ai_max_tokens: generation.max_tokens.to_string(),
+            ai_think: generation.think,
             ai_d1_min_factuality: d1.min_factuality.to_string(),
             ai_d1_min_completeness: d1.min_completeness.to_string(),
             ai_d1_max_retries: d1.max_retries.to_string(),
@@ -214,6 +217,7 @@ pub enum Message {
     AiD1ModelChanged(String),
     AiTemperatureChanged(String),
     AiMaxTokensChanged(String),
+    ToggleAiThinking(bool),
     AiD1FactualityChanged(String),
     AiD1CompletenessChanged(String),
     AiD1RetriesChanged(String),
@@ -264,6 +268,7 @@ impl App {
             ai_d1_model: ai.d1_model.clone(),
             ai_temperature: generation.temperature.to_string(),
             ai_max_tokens: generation.max_tokens.to_string(),
+            ai_think: generation.think,
             ai_d1_min_factuality: d1.min_factuality.to_string(),
             ai_d1_min_completeness: d1.min_completeness.to_string(),
             ai_d1_max_retries: d1.max_retries.to_string(),
@@ -354,6 +359,7 @@ impl App {
         Ok(GenerationConfig {
             temperature,
             max_tokens,
+            think: self.ai_think,
         })
     }
 
@@ -706,6 +712,11 @@ pub fn update(app: &mut App, message: Message) -> Task<Message> {
         }
         Message::AiMaxTokensChanged(value) => {
             app.ai_max_tokens = value;
+            app.ai_status = None;
+            Task::none()
+        }
+        Message::ToggleAiThinking(enabled) => {
+            app.ai_think = enabled;
             app.ai_status = None;
             Task::none()
         }

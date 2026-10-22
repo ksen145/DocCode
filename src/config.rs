@@ -49,6 +49,9 @@ pub struct GenerationConfig {
     /// Ограничение длины ответа в токенах.
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
+    /// Разрешить модели рассуждать перед ответом (`think` в Ollama).
+    #[serde(default = "default_think")]
+    pub think: bool,
 }
 
 fn default_temperature() -> f32 {
@@ -59,11 +62,16 @@ fn default_max_tokens() -> u32 {
     4000
 }
 
+fn default_think() -> bool {
+    true
+}
+
 impl Default for GenerationConfig {
     fn default() -> Self {
         Self {
             temperature: default_temperature(),
             max_tokens: default_max_tokens(),
+            think: default_think(),
         }
     }
 }
@@ -149,7 +157,7 @@ impl ThemeMode {
 pub struct AppConfig {
     /// AI-бэкенд.
     pub ai_backend: AiBackendConfig,
-    /// Параметры генерации (temperature/max_tokens).
+    /// Параметры генерации (temperature/max_tokens/think).
     #[serde(default)]
     pub generation: GenerationConfig,
     /// Настройки контроля качества D1.
@@ -250,6 +258,7 @@ mod tests {
         assert_eq!(back.lang, "ru");
         assert_eq!(back.generation.temperature, 0.15);
         assert_eq!(back.generation.max_tokens, 4000);
+        assert!(back.generation.think);
         assert_eq!(back.d1.min_factuality, 0.85);
         assert_eq!(back.d1.min_completeness, 3);
         assert_eq!(back.d1.max_retries, 1);
@@ -270,6 +279,7 @@ model = "qwen2.5-coder:7b"
         assert_eq!(cfg.theme, ThemeMode::Light);
         assert_eq!(cfg.generation.temperature, 0.15);
         assert_eq!(cfg.generation.max_tokens, 4000);
+        assert!(cfg.generation.think);
         assert_eq!(cfg.d1.min_factuality, 0.85);
         assert_eq!(cfg.d1.min_completeness, 3);
         assert_eq!(cfg.d1.max_retries, 1);
@@ -308,6 +318,7 @@ model = "qwen2.5-coder:7b"
         let mut cfg = AppConfig::default_config();
         cfg.generation.temperature = 0.4;
         cfg.generation.max_tokens = 8192;
+        cfg.generation.think = false;
         cfg.d1.min_factuality = 0.72;
         cfg.d1.min_completeness = 4;
         cfg.d1.max_retries = 2;
@@ -315,6 +326,7 @@ model = "qwen2.5-coder:7b"
         let back: AppConfig = toml::from_str(&text).unwrap();
         assert_eq!(back.generation.temperature, 0.4);
         assert_eq!(back.generation.max_tokens, 8192);
+        assert!(!back.generation.think);
         assert_eq!(back.d1.min_factuality, 0.72);
         assert_eq!(back.d1.min_completeness, 4);
         assert_eq!(back.d1.max_retries, 2);

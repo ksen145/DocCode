@@ -102,6 +102,8 @@ ai:
   temperature_hint: "0.0–2.0; lower is more stable and precise"
   max_tokens: "Max tokens"
   max_tokens_hint: "64–32768; limits the response length"
+  thinking: "Use model reasoning (think)"
+  thinking_hint: "The model may reason before answering; the reasoning block is excluded from the final HTML."
   d1_card: "D1 quality control"
   d1_model: "D1 model"
   d1_model_hint: "Recommended: d1; verifies facts and completeness"
@@ -140,7 +142,7 @@ prompts:
   save_error: "Failed to save prompts"
   reset: "Reset (reload)"
   parameters_title: "Generation parameters"
-  parameters_hint: "Temperature and max_tokens are configured in AI settings and applied to the next run."
+  parameters_hint: "Temperature, max_tokens and the think mode are configured in AI settings and applied to the next run."
   open_ai: "Open AI settings"
 
 progress:

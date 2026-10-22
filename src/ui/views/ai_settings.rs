@@ -3,7 +3,7 @@
 use super::{badge, card, field, page_header, palette, primary, secondary, status_line};
 use crate::app::{App, Message};
 use crate::ui::theme::{self, SEMIBOLD};
-use iced::widget::{column, container, row, text, text_input, Space};
+use iced::widget::{checkbox, column, container, row, text, text_input, Space};
 use iced::{Alignment, Element, Length};
 
 /// Содержимое экрана подключения к Ollama и параметров качества.
@@ -51,6 +51,13 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .size(13)
         .width(Length::Fill)
         .style(move |_, status| theme::input(p, status));
+
+    let thinking = checkbox(app.t("ai.thinking").to_string(), app.ai_think)
+        .size(18)
+        .text_size(13)
+        .spacing(9)
+        .style(move |_, status| theme::checkbox(p, status))
+        .on_toggle(Message::ToggleAiThinking);
 
     let factuality_input = text_input("0.85", &app.ai_d1_min_factuality)
         .on_input(Message::AiD1FactualityChanged)
@@ -150,6 +157,12 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 ),
             ]
             .spacing(14),
+            row![
+                thinking,
+                text(app.t("ai.thinking_hint")).size(11).color(p.muted),
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center),
         ]
         .spacing(10),
     );

@@ -79,15 +79,20 @@ impl OllamaClient {
             opts.insert("num_predict".to_string(), serde_json::json!(max_tokens));
         }
 
-        serde_json::json!({
+        let mut body = serde_json::json!({
             "model": self.model,
             "prompt": prompt,
             "stream": false,
-            // Не просим reasoning: для документации нужно только готовое описание.
-            // Кастомные модели могут игнорировать флаг — остаток вычищается ниже.
-            "think": false,
             "options": serde_json::Value::Object(opts),
-        })
+        });
+
+        // `think` управляется настройкой AI. При true рассуждения разрешены,
+        // но их блок всё равно вычищается из ответа перед рендером HTML.
+        if let Some(think) = options.think {
+            body["think"] = serde_json::json!(think);
+        }
+
+        body
     }
 
     async fn post_json(
@@ -209,12 +214,14 @@ mod tests {
     #[test]
     fn generate_body_maps_defaults_to_ollama_options() {
         let client = OllamaClient::new("http://localhost:11434", "test-model");
-        let body = client.generate_body("привет", &GenerateOptions::new(0.2, 800));
+        let mut options = GenerateOptions::new(0.2, 800);
+        options.think = Some(true);
+        let body = client.generate_body("привет", &options);
 
         assert_eq!(body["model"], "test-model");
         assert_eq!(body["prompt"], "привет");
         assert_eq!(body["stream"], false);
-        assert_eq!(body["think"], false);
+        assert_eq!(body["think"], true);
         let temperature = body["options"]["temperature"]
             .as_f64()
             .expect("temperature — число");
@@ -235,6 +242,23 @@ mod tests {
             opts.is_empty(),
             "пустые options не должны добавлять параметров"
         );
+        assert!(
+            body.get("think").is_none(),
+            "без настройки think не должен отправляться"
+        );
+    }
+
+    #[test]
+    fn generate_body_forwards_think_setting() {
+        let client = OllamaClient::local();
+        for think in [false, true] {
+            let options = GenerateOptions {
+                think: Some(think),
+                ..GenerateOptions::default()
+            };
+            let body = client.generate_body("prompt", &options);
+            assert_eq!(body["think"], think);
+        }
     }
 
     #[test]

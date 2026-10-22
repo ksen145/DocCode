@@ -133,6 +133,8 @@ pub const KEYS: &[&str] = &[
     "ai.temperature_hint",
     "ai.max_tokens",
     "ai.max_tokens_hint",
+    "ai.thinking",
+    "ai.thinking_hint",
     "ai.d1_card",
     "ai.d1_model",
     "ai.d1_model_hint",
