@@ -217,23 +217,12 @@ prompts.yaml      # built-in prompts (overridden by a user file)
 
 ## Code signing policy
 
-Windows releases are built from source on GitHub-hosted runners and signed
-through [SignPath.io](https://about.signpath.io); the certificate is issued to
-[SignPath Foundation](https://signpath.org). The private key never leaves
-SignPath and no signing secrets are stored in this repository.
+Windows releases are signed with a certificate from SignPath Foundation —
+free code signing provided by [SignPath.io](https://about.signpath.io),
+certificate by [SignPath Foundation](https://signpath.org).
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
-
-- Committers and reviewers: [@ksen145](https://github.com/ksen145)
-- Approvers: [@ksen145](https://github.com/ksen145)
-
-Every release is built by the [`Release`](.github/workflows/release.yml) workflow
-from the tagged commit and approved manually before signing. The signing policy
-and artifact configurations live in [`packaging/windows/signpath/`](packaging/windows/signpath/).
-
-Privacy policy: DocCode runs entirely on the local machine and sends no data
-anywhere except the Ollama endpoint configured by the user — see
-[Data locations](#data-locations).
+What is signed, how requests are approved and how to verify a download:
+[**CODE_SIGNING_POLICY.md**](CODE_SIGNING_POLICY.md).
 
 ## Packaging
 

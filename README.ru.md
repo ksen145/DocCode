@@ -215,23 +215,12 @@ prompts.yaml      # встроенные промпты (переопредел�
 
 ## Code signing policy — политика подписи кода
 
-Windows-релизы собираются из исходников на GitHub-hosted раннерах и
-подписываются через [SignPath.io](https://about.signpath.io); сертификат выдан
-[SignPath Foundation](https://signpath.org). Приватный ключ не покидает SignPath,
-секретов подписи в репозитории нет.
+Windows-релизы подписываются сертификатом SignPath Foundation: free code signing
+provided by [SignPath.io](https://about.signpath.io), certificate by
+[SignPath Foundation](https://signpath.org).
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
-
-- Коммиттеры и ревьюеры: [@ksen145](https://github.com/ksen145)
-- Утверждающие релизы: [@ksen145](https://github.com/ksen145)
-
-Каждый релиз собирается workflow [`Release`](.github/workflows/release.yml) из
-помеченного коммита и подтверждается вручную перед подписью. Политика и
-конфигурации артефактов лежат в [`packaging/windows/signpath/`](packaging/windows/signpath/).
-
-Политика приватности: DocCode работает полностью локально и ничего никуда не
-отправляет, кроме настроенного пользователем Ollama — см.
-[Где хранятся данные](#где-хранятся-данные).
+Что именно подписывается, как утверждаются запросы и как проверить загрузку:
+[**CODE_SIGNING_POLICY.md**](CODE_SIGNING_POLICY.md).
 
 ## Упаковка
 

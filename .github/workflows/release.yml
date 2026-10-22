@@ -204,7 +204,7 @@ jobs:
           DocCode $env:VERSION для Windows (x64).
 
           Code signing policy: free code signing provided by SignPath.io, certificate by SignPath Foundation.
-          https://github.com/ksen145/DocCode#code-signing-policy
+          https://github.com/ksen145/DocCode/blob/main/CODE_SIGNING_POLICY.md
 
           Проверка подписи: Get-AuthenticodeSignature "DocCode-$env:VERSION-x64-setup.exe"
           SHA-256 — в SHA256SUMS.txt.
