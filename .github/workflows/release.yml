@@ -200,6 +200,11 @@ jobs:
           $tag = "v$env:VERSION"
           $installer = "dist/windows/DocCode-$env:VERSION-x64-setup.exe"
           $files = @($installer, 'dist/windows/SHA256SUMS.txt')
+
+          # Если для версии подготовлено описание, берём его; иначе — короткий текст ниже.
+          $notesFile = ".github/release-notes/v$env:VERSION.md"
+          $hasNotes = Test-Path $notesFile
+
           $notes = @"
           DocCode $env:VERSION для Windows (x64).
 
@@ -213,7 +218,11 @@ jobs:
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag @files --clobber
+            if ($hasNotes) { gh release edit $tag --notes-file $notesFile }
             Write-Host "Обновлён релиз $tag"
+          } elseif ($hasNotes) {
+            gh release create $tag @files --title "DocCode $env:VERSION" --target "${{ github.sha }}" --notes-file $notesFile
+            Write-Host "Создан релиз $tag"
           } else {
             gh release create $tag @files --title "DocCode $env:VERSION" --target "${{ github.sha }}" --notes $notes
             Write-Host "Создан релиз $tag"
