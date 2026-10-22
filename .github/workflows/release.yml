@@ -1,0 +1,220 @@
+# Сборка, подпись и публикация Windows-релиза.
+#
+# Подпись выполняет SignPath Foundation (бесплатно для OSS): приватный ключ
+# живёт в SignPath, в репозитории и в логах его нет. Каждый запрос на подпись
+# OSS-проекта подтверждается вручную в SignPath, поэтому job может ждать
+# согласования до часа (wait-for-completion-timeout-in-seconds).
+#
+# Что нужно один раз настроить (см. packaging/windows/signpath/*.xml и https://signpath.org/apply):
+#   secret SIGNPATH_API_TOKEN
+#   vars   SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG,
+#          SIGNPATH_SIGNING_POLICY_SLUG (по умолчанию release-signing)
+#   artifact configurations в SignPath: doccode-exe, doccode-installer
+#          (XML лежат в packaging/windows/signpath/)
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Версия без префикса v (по умолчанию — из Cargo.toml)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          $cargo = (Select-String -Path Cargo.toml -Pattern '^\s*version\s*=\s*"([^"]+)"' |
+            Select-Object -First 1).Matches[0].Groups[1].Value
+
+          if ($env:INPUT_VERSION) {
+            $version = $env:INPUT_VERSION.Trim()
+          } elseif ($env:REF_TYPE -eq 'tag') {
+            $version = $env:REF_NAME -replace '^v', ''
+          } else {
+            $version = $cargo
+          }
+
+          if ($version -ne $cargo) {
+            throw "Версия '$version' не совпадает с Cargo.toml ('$cargo'): поднимите version в Cargo.toml перед релизом."
+          }
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Версия: $version"
+
+      - name: Check signing configuration
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+        run: |
+          $missing = @()
+          if (-not $env:SIGNPATH_API_TOKEN) { $missing += 'secret SIGNPATH_API_TOKEN' }
+          if (-not $env:SIGNPATH_ORGANIZATION_ID) { $missing += 'var SIGNPATH_ORGANIZATION_ID' }
+          if (-not $env:SIGNPATH_PROJECT_SLUG) { $missing += 'var SIGNPATH_PROJECT_SLUG' }
+          if ($missing.Count -gt 0) {
+            throw "Не настроена подпись: отсутствует $($missing -join ', '). См. packaging/windows/signpath/ и https://signpath.org/apply."
+          }
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install NSIS
+        run: |
+          choco install nsis --no-progress -y
+          $nsis = 'C:\Program Files (x86)\NSIS'
+          if (-not (Test-Path $nsis)) { throw "NSIS не установился: $nsis" }
+          $nsis | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      # --- подпись doccode.exe до упаковки в установщик ---------------------
+      - name: Upload unsigned exe
+        id: upload-exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: doccode-exe-unsigned
+          path: target/release/doccode.exe
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Sign doccode.exe
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: doccode-exe
+          github-artifact-id: ${{ steps.upload-exe.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: build/signed-exe
+          parameters: |
+            version: "${{ steps.version.outputs.version }}"
+
+      - name: Use signed exe
+        run: |
+          $signed = Get-ChildItem -Path build/signed-exe -Recurse -Filter doccode.exe |
+            Select-Object -First 1
+          if (-not $signed) { throw 'SignPath не вернул doccode.exe' }
+          Copy-Item $signed.FullName target/release/doccode.exe -Force
+          $sig = Get-AuthenticodeSignature target/release/doccode.exe
+          if ($sig.Status -ne 'Valid') { throw "Подпись doccode.exe невалидна: $($sig.StatusMessage)" }
+          Write-Host "Подписал: $($sig.SignerCertificate.Subject)"
+
+      - name: Build NSIS installer
+        run: ./packaging/windows/build-installer.ps1 -SkipBuild -Version "${{ steps.version.outputs.version }}"
+
+      # --- подпись готового установщика ------------------------------------
+      - name: Upload unsigned installer
+        id: upload-installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: doccode-installer-unsigned
+          path: dist/windows/DocCode-${{ steps.version.outputs.version }}-x64-setup.exe
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Sign installer
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: doccode-installer
+          github-artifact-id: ${{ steps.upload-installer.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: build/signed-installer
+          parameters: |
+            version: "${{ steps.version.outputs.version }}"
+
+      - name: Verify signatures
+        run: |
+          $installer = "dist/windows/DocCode-${{ steps.version.outputs.version }}-x64-setup.exe"
+          $signed = Get-ChildItem -Path build/signed-installer -Recurse -Filter 'DocCode-*-x64-setup.exe' |
+            Select-Object -First 1
+          if (-not $signed) { throw 'SignPath не вернул установщик' }
+          Copy-Item $signed.FullName $installer -Force
+
+          foreach ($file in @('target/release/doccode.exe', $installer)) {
+            $sig = Get-AuthenticodeSignature $file
+            if ($sig.Status -ne 'Valid') {
+              throw "Подпись невалидна: $file ($($sig.Status): $($sig.StatusMessage))"
+            }
+            if (-not $sig.TimeStamperCertificate) {
+              Write-Warning "Нет timestamp у $file — подпись перестанет действовать после истечения сертификата"
+            }
+            Write-Host "$([IO.Path]::GetFileName($file)): $($sig.SignerCertificate.Subject)"
+          }
+
+          $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLower()
+          "$hash  $(Split-Path -Leaf $installer)" |
+            Set-Content -Path dist/windows/SHA256SUMS.txt -Encoding ascii
+          Write-Host "SHA-256: $hash"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Проверка наличия релиза — ожидаемая неудача gh, не должна ронять шаг.
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          $tag = "v$env:VERSION"
+          $installer = "dist/windows/DocCode-$env:VERSION-x64-setup.exe"
+          $files = @($installer, 'dist/windows/SHA256SUMS.txt')
+          $notes = @"
+          DocCode $env:VERSION для Windows (x64).
+
+          Code signing policy: free code signing provided by SignPath.io, certificate by SignPath Foundation.
+          https://github.com/ksen145/DocCode#code-signing-policy
+
+          Проверка подписи: Get-AuthenticodeSignature "DocCode-$env:VERSION-x64-setup.exe"
+          SHA-256 — в SHA256SUMS.txt.
+          "@
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @files --clobber
+            Write-Host "Обновлён релиз $tag"
+          } else {
+            gh release create $tag @files --title "DocCode $env:VERSION" --target "${{ github.sha }}" --notes $notes
+            Write-Host "Создан релиз $tag"
+          }

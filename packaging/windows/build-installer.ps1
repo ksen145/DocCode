@@ -17,7 +17,17 @@ param(
     # Версия установщика. По умолчанию читается из Cargo.toml.
     [string]$Version,
     # Не пересобирать target/release/doccode.exe.
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    # Подписать exe и установщик сертификатом Code Signing.
+    [switch]$Sign,
+    # PFX-файл (иначе DOCCODE_PFX_PATH).
+    [string]$PfxPath = $env:DOCCODE_PFX_PATH,
+    # Отпечаток сертификата в хранилище Windows (иначе DOCCODE_CERT_THUMBPRINT).
+    [string]$Thumbprint = $env:DOCCODE_CERT_THUMBPRINT,
+    # Искать сертификат в LocalMachine\My вместо CurrentUser\My.
+    [switch]$MachineStore,
+    # RFC 3161 timestamp-сервер.
+    [string]$TimestampUrl = 'http://timestamp.digicert.com'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,6 +44,24 @@ if (-not $Version) {
     $Version = $line.Matches[0].Groups[1].Value
 }
 Write-Host "DocCode $Version — сборка установщика Windows"
+
+# NSIS VIProductVersion требует четыре числа, Cargo.toml даёт три.
+# Prerelease-суффикс (1.2.3-rc.1) допустим в имени файла, но не в VIProductVersion.
+$NumericVersion = $Version -replace '[-+].*$', ''
+if ($NumericVersion -match '^\d+\.\d+\.\d+$') {
+    $Version4 = "$NumericVersion.0"
+} elseif ($NumericVersion -match '^\d+\.\d+\.\d+\.\d+$') {
+    $Version4 = $NumericVersion
+} else {
+    throw "Версия должна начинаться с x.y.z или x.y.z.w: $Version"
+}
+
+if ($Sign -and -not $PfxPath -and -not $Thumbprint) {
+    throw 'Для -Sign нужен PFX (-PfxPath / DOCCODE_PFX_PATH) или отпечаток сертификата (-Thumbprint / DOCCODE_CERT_THUMBPRINT).'
+}
+if ($PfxPath -and $Thumbprint) {
+    throw 'Укажите только один источник ключа: -PfxPath или -Thumbprint.'
+}
 
 # --- иконки ----------------------------------------------------------------
 $ico = Join-Path $packagingDir 'icon\doccode.ico'
@@ -54,6 +82,21 @@ if (-not $SkipBuild -or -not (Test-Path $exe)) {
 }
 if (-not (Test-Path $exe)) { throw "Бинарь не найден: $exe" }
 
+# --- подпись exe до упаковки в установщик ----------------------------------
+if ($Sign) {
+    $signArgs = @{
+        Path         = @($exe)
+        TimestampUrl = $TimestampUrl
+    }
+    if ($PfxPath) {
+        $signArgs.PfxPath = $PfxPath
+    } else {
+        $signArgs.Thumbprint = $Thumbprint
+        if ($MachineStore) { $signArgs.MachineStore = $true }
+    }
+    & (Join-Path $windowsDir 'sign.ps1') @signArgs
+}
+
 # --- makensis --------------------------------------------------------------
 $makensis = Get-Command makensis -ErrorAction SilentlyContinue
 if (-not $makensis) {
@@ -65,7 +108,7 @@ Write-Host "Размер doccode.exe: $sizeKB KB"
 
 Push-Location $windowsDir
 try {
-    & $makensis.Source "/DPRODUCT_VERSION=$Version" "/DESTIMATED_SIZE=$sizeKB" 'installer.nsi'
+    & $makensis.Source "/DPRODUCT_VERSION=$Version" "/DPRODUCT_VERSION4=$Version4" "/DESTIMATED_SIZE=$sizeKB" 'installer.nsi'
     if ($LASTEXITCODE -ne 0) { throw "makensis завершился с кодом $LASTEXITCODE" }
 } finally { Pop-Location }
 
@@ -77,5 +120,20 @@ $outDir = Join-Path $root 'dist\windows'
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $dest = Join-Path $outDir (Split-Path -Leaf $built)
 Move-Item -Force $built $dest
+
+# --- подпись готового установщика ------------------------------------------
+if ($Sign) {
+    $signArgs = @{
+        Path         = @($dest)
+        TimestampUrl = $TimestampUrl
+    }
+    if ($PfxPath) {
+        $signArgs.PfxPath = $PfxPath
+    } else {
+        $signArgs.Thumbprint = $Thumbprint
+        if ($MachineStore) { $signArgs.MachineStore = $true }
+    }
+    & (Join-Path $windowsDir 'sign.ps1') @signArgs
+}
 
 Write-Host "Готово: $dest"

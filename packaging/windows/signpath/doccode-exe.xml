@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Артефакт: target/release/doccode.exe, загруженный в GitHub Actions как
+  artifact (upload-artifact складывает файл в ZIP, поэтому корень — zip-file).
+
+  Куда положить: SignPath → Project → Artifact configurations → Add,
+  slug: doccode-exe. Затем этот slug передаётся в workflow.
+
+  product-name / product-version — metadata restrictions, которых требует
+  SignPath Foundation: значения должны совпадать с PE-ресурсами файла
+  (их задаёт build.rs и версия из Cargo.toml).
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+
+  <zip-file>
+    <pe-file path="doccode.exe"
+             product-name="DocCode"
+             product-version="${version}">
+      <authenticode-sign hash-algorithm="sha256" />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

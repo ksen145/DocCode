@@ -213,15 +213,48 @@ prompts.yaml      # встроенные промпты (переопредел�
 - Оболочка сгенерированного сайта пока локализована на русский; выбранный язык влияет на язык документации.
 - macOS не проверялся.
 
+## Code signing policy — политика подписи кода
+
+Windows-релизы собираются из исходников на GitHub-hosted раннерах и
+подписываются через [SignPath.io](https://about.signpath.io); сертификат выдан
+[SignPath Foundation](https://signpath.org). Приватный ключ не покидает SignPath,
+секретов подписи в репозитории нет.
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+- Коммиттеры и ревьюеры: [@ksen145](https://github.com/ksen145)
+- Утверждающие релизы: [@ksen145](https://github.com/ksen145)
+
+Каждый релиз собирается workflow [`Release`](.github/workflows/release.yml) из
+помеченного коммита и подтверждается вручную перед подписью. Политика и
+конфигурации артефактов лежат в [`packaging/windows/signpath/`](packaging/windows/signpath/).
+
+Политика приватности: DocCode работает полностью локально и ничего никуда не
+отправляет, кроме настроенного пользователем Ollama — см.
+[Где хранятся данные](#где-хранятся-данные).
+
 ## Упаковка
 
-Инструкции по сборке иконок, установщика Windows и пакетов Linux — в
-[`packaging/README.md`](packaging/README.md).
+Иконки, установщик Windows и пакеты Linux собирают скрипты в
+[`packaging/`](packaging/): `build-release.ps1` запускает всё сразу, `windows/` —
+NSIS-установщик, `linux/` — .deb/AppImage в Docker.
+
+Версия живёт в одном месте — `version` в `Cargo.toml`. Меняется через
+`packaging/bump-version.ps1` (заодно синхронизирует `Cargo.lock`), затем тег `vX.Y.Z`:
+
+```powershell
+powershell -File packaging\bump-version.ps1 0.2.0
+git commit -am "release: 0.2.0"; git tag v0.2.0
+```
 
 ```powershell
 # всё сразу: иконки + Windows + Linux (Linux собирается в Docker)
 powershell -File packaging/build-release.ps1
 ```
+
+## Лицензия
+
+MIT — см. [LICENSE](LICENSE).
 
 ---
 

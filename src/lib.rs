@@ -13,5 +13,5 @@ pub mod prompts;
 pub mod ui;
 pub mod utils;
 
-/// Версия пакета.
-pub const VERSION: &str = "0.1.0";
+/// Версия пакета — единственный источник: `version` в `Cargo.toml`.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

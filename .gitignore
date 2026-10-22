@@ -9,7 +9,14 @@
 /PLAN.md
 /CHECKLIST.md
 /D1.md
+/packaging/README.md
 
 # Локальная конфигурация и логи.
 /config.toml
 *.log
+
+# Ключи и контейнеры для подписи кода.
+*.pfx
+*.p12
+*.key
+/packaging/signing/

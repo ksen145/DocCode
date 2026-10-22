@@ -6,7 +6,7 @@
   - иконки (PNG/ICO/RGBA)      → packaging/icon/*
   - установщик Windows (NSIS)  → dist/windows/DocCode-<ver>-x64-setup.exe
   - deb и AppImage для Linux   → dist/linux/*
-  macOS из-под Windows не собирается (нужен macOS SDK и подпись) — см. packaging/README.md.
+  macOS из-под Windows не собирается (нужен macOS SDK и подпись).
 
 .EXAMPLE
   powershell -File packaging\build-release.ps1
@@ -22,7 +22,19 @@ param(
     [string]$Version,
 
     # Не пересобирать exe перед созданием установщика.
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+
+    # Подписать exe и установщик сертификатом Code Signing.
+    [switch]$Sign,
+
+    # PFX-файл (иначе DOCCODE_PFX_PATH).
+    [string]$PfxPath = $env:DOCCODE_PFX_PATH,
+
+    # Отпечаток сертификата в хранилище Windows (иначе DOCCODE_CERT_THUMBPRINT).
+    [string]$Thumbprint = $env:DOCCODE_CERT_THUMBPRINT,
+
+    # Искать сертификат в LocalMachine\My вместо CurrentUser\My.
+    [switch]$MachineStore
 )
 
 $ErrorActionPreference = 'Stop'
@@ -50,6 +62,12 @@ foreach ($step in $steps) {
             $installerArgs = @()
             if ($Version) { $installerArgs += @('-Version', $Version) }
             if ($SkipBuild) { $installerArgs += '-SkipBuild' }
+            if ($Sign) {
+                $installerArgs += '-Sign'
+                if ($PfxPath) { $installerArgs += @('-PfxPath', $PfxPath) }
+                if ($Thumbprint) { $installerArgs += @('-Thumbprint', $Thumbprint) }
+                if ($MachineStore) { $installerArgs += '-MachineStore' }
+            }
             & (Join-Path $packagingDir 'windows\build-installer.ps1') @installerArgs
         }
         'linux' {

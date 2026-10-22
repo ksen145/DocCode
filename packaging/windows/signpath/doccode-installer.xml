@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Артефакт: dist/windows/DocCode-<version>-x64-setup.exe из GitHub Actions
+  (upload-artifact складывает файл в ZIP, поэтому корень — zip-file).
+
+  Куда положить: SignPath → Project → Artifact configurations → Add,
+  slug: doccode-installer. Затем этот slug передаётся в workflow.
+
+  product-name / product-version задаются в installer.nsi через
+  VIProductVersion/VIAddVersionKey — без них SignPath откажет в подписи.
+  Внутренний doccode.exe подписан отдельным запросом до упаковки в NSIS.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+
+  <zip-file>
+    <pe-file path="DocCode-${version}-x64-setup.exe"
+             product-name="DocCode"
+             product-version="${version}">
+      <authenticode-sign hash-algorithm="sha256" />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

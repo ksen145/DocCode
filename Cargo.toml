@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 description = "Local desktop app that generates interactive HTML documentation from source code using a local LLM"
 readme = "README.md"
+license = "MIT"
+repository = "https://github.com/ksen145/DocCode"
 publish = false
 
 [dependencies]

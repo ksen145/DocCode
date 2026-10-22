@@ -8,14 +8,14 @@
 ;
 ;  Вручную:
 ;    cd packaging\windows
-;    makensis /DPRODUCT_VERSION=0.1.0 /DESTIMATED_SIZE=19234 installer.nsi
+;    makensis /DPRODUCT_VERSION=<ver> /DESTIMATED_SIZE=19234 installer.nsi
 ;
 ;  Скрипт намеренно ASCII-only: локализацию страниц дают встроенные
 ;  переводы MUI_LANGUAGE, поэтому UTF-8 BOM здесь не требуется.
 ; ============================================================
 
 !ifndef PRODUCT_VERSION
-  !define PRODUCT_VERSION "0.1.0"
+  !error "PRODUCT_VERSION не задан. Используйте packaging/windows/build-installer.ps1 или makensis /DPRODUCT_VERSION=<ver> — версия берётся из Cargo.toml."
 !endif
 
 !define PRODUCT_NAME    "DocCode"
@@ -27,6 +27,21 @@
 
 Unicode true
 SetCompressor /SOLID lzma
+
+; --- Версия в свойствах setup.exe -------------------------------------------
+; SignPath проверяет product-name/product-version (metadata restrictions),
+; поэтому без этих ключей подпись не подтвердится. PRODUCT_VERSION4 передаёт
+; build-installer.ps1: NSIS требует здесь ровно четыре числа.
+!ifndef PRODUCT_VERSION4
+  !define PRODUCT_VERSION4 "${PRODUCT_VERSION}.0"
+!endif
+VIProductVersion "${PRODUCT_VERSION4}"
+VIAddVersionKey /LANG=1033 "ProductName"      "${PRODUCT_NAME}"
+VIAddVersionKey /LANG=1033 "ProductVersion"   "${PRODUCT_VERSION}"
+VIAddVersionKey /LANG=1033 "FileVersion"      "${PRODUCT_VERSION}"
+VIAddVersionKey /LANG=1033 "FileDescription"  "${PRODUCT_NAME} installer"
+VIAddVersionKey /LANG=1033 "LegalCopyright"   "Copyright (c) DocCode"
+VIAddVersionKey /LANG=1033 "OriginalFilename" "DocCode-${PRODUCT_VERSION}-x64-setup.exe"
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
 OutFile "DocCode-${PRODUCT_VERSION}-x64-setup.exe"

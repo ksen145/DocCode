@@ -40,6 +40,7 @@ dependencies and no network requests.
 | 🔍 | **Multi-language analysis** | Python, Rust, JavaScript, TypeScript, HTML and CSS parsed with tree-sitter |
 | 🧠 | **Vector code index** | Qdrant Edge embedded (no separate server) or an in-memory fallback |
 | ✍️ | **LLM-written docs** | A component plan plus per-component Markdown grounded in retrieved context |
+| 🧩 | **Configurable reasoning** | Enable or disable model `think`; reasoning traces are stripped before Markdown becomes HTML |
 | ✅ | **D1 quality gate** | Factual accuracy and completeness scored by a model, with configurable thresholds and retries |
 | 📦 | **One output file** | `index.html` with overview, entry points, component tree, search, breadcrumbs and hash routes |
 | 🎨 | **Light and dark themes** | Theme follows the OS by default; an explicit choice is persisted |
@@ -119,7 +120,8 @@ In the app:
 1. Pick the project root and the documentation folder with the system dialog
    (default is `docs/` inside the project).
 2. Configure Ollama: URL, generation model, embeddings model and D1 model.
-3. Optionally adjust `temperature`, `max_tokens`, D1 thresholds and retry count.
+3. Optionally adjust `temperature`, `max_tokens`, the `think` reasoning toggle,
+   D1 thresholds and retry count.
 4. Press **Generate** and follow the stages:
    **Scan → Index → Plan → Generate → Finalize**.
 5. Open the produced `index.html`.
@@ -213,15 +215,48 @@ prompts.yaml      # built-in prompts (overridden by a user file)
 - The generated site shell is currently localized in Russian; the selected language affects the documentation language.
 - macOS is not verified.
 
+## Code signing policy
+
+Windows releases are built from source on GitHub-hosted runners and signed
+through [SignPath.io](https://about.signpath.io); the certificate is issued to
+[SignPath Foundation](https://signpath.org). The private key never leaves
+SignPath and no signing secrets are stored in this repository.
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+- Committers and reviewers: [@ksen145](https://github.com/ksen145)
+- Approvers: [@ksen145](https://github.com/ksen145)
+
+Every release is built by the [`Release`](.github/workflows/release.yml) workflow
+from the tagged commit and approved manually before signing. The signing policy
+and artifact configurations live in [`packaging/windows/signpath/`](packaging/windows/signpath/).
+
+Privacy policy: DocCode runs entirely on the local machine and sends no data
+anywhere except the Ollama endpoint configured by the user — see
+[Data locations](#data-locations).
+
 ## Packaging
 
-Instructions for icons, the Windows installer and Linux packages live in
-[`packaging/README.md`](packaging/README.md).
+Icons, the Windows installer and Linux packages are built by the scripts in
+[`packaging/`](packaging/): `build-release.ps1` runs everything, `windows/`
+holds the NSIS installer, `linux/` builds .deb/AppImage in Docker.
+
+The version lives in one place — `version` in `Cargo.toml`. Bump it with
+`packaging/bump-version.ps1` (it also syncs `Cargo.lock`), then tag `vX.Y.Z`:
+
+```powershell
+powershell -File packaging\bump-version.ps1 0.2.0
+git commit -am "release: 0.2.0"; git tag v0.2.0
+```
 
 ```powershell
 # everything at once: icons + Windows + Linux (Linux is built in Docker)
 powershell -File packaging/build-release.ps1
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
 
 ---
 
