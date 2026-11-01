@@ -8,6 +8,7 @@ use crate::ai::make_client;
 use crate::config::{AiBackendConfig, AppConfig, D1Config, GenerationConfig, ThemeMode};
 use crate::core::model::ProjectModel;
 use crate::core::pipeline;
+use crate::core::progress::{ProgressCounters, ProgressSnapshot};
 use crate::docs::rag::IndexStats;
 use crate::docs::site::{self, ComponentResult, SiteConfig, SiteDraft, SiteStats};
 use crate::prompts::manager::PromptsManager;
@@ -19,6 +20,8 @@ use iced::{Element, Task};
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Стадия генерации (для экрана прогресса).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,6 +112,16 @@ pub struct App {
     // --- Прогресс текущего запуска ---
     /// Текущая стадия.
     pub stage: Stage,
+    /// Счётчики сканирования/индексации, которые пишет фоновый пайплайн.
+    pub progress: Arc<ProgressCounters>,
+    /// Момент старта текущего запуска (для таймера).
+    pub started_at: Option<Instant>,
+    /// Момент старта текущей стадии (для оценки остатка).
+    stage_started_at: Option<Instant>,
+    /// Стадия, для которой уже взят отсчёт времени.
+    clock_stage: Stage,
+    /// Сглаженный общий прогресс 0..100 (не уменьшается, чтобы бар не прыгал).
+    pub overall_percent: f32,
     /// Завершено единиц работы (компонентов).
     pub progress_done: usize,
     /// Всего единиц работы.
@@ -168,6 +181,11 @@ impl Default for App {
             prompts_content: text_editor::Content::new(),
             prompts_status: None,
             stage: Stage::Idle,
+            progress: Arc::new(ProgressCounters::new()),
+            started_at: None,
+            stage_started_at: None,
+            clock_stage: Stage::Idle,
+            overall_percent: 0.0,
             progress_done: 0,
             progress_total: 0,
             files_scanned: 0,
@@ -233,6 +251,8 @@ pub enum Message {
 
     // --- Генерация ---
     Generate,
+    /// Тик таймера на экране прогресса (обновляет проценты и время).
+    Tick,
     AnalysisFinished(Result<pipeline::Analysis, String>),
     IndexFinished(Result<IndexStats, String>),
     SitePlanned(Result<Box<SiteDraft>, String>),
@@ -308,6 +328,153 @@ impl App {
     /// Включена ли тёмная тема.
     pub fn is_dark_theme(&self) -> bool {
         self.resolved_dark
+    }
+
+    /// Снимок счётчиков фонового пайплайна.
+    pub fn progress_snapshot(&self) -> ProgressSnapshot {
+        self.progress.snapshot()
+    }
+
+    /// Время с начала запуска.
+    pub fn elapsed(&self) -> Duration {
+        self.started_at
+            .map(|start| start.elapsed())
+            .unwrap_or_default()
+    }
+
+    /// Время с начала текущей стадии.
+    fn stage_elapsed(&self) -> Duration {
+        self.stage_started_at
+            .map(|start| start.elapsed())
+            .unwrap_or_default()
+    }
+
+    /// Прогресс текущей стадии в процентах (0..100).
+    pub fn stage_percent(&self) -> f32 {
+        self.stage_fraction() * 100.0
+    }
+
+    /// Доля текущей стадии от 0 до 1.
+    ///
+    /// Для сканирования/индексации/генерации берутся реальные счётчики,
+    /// для стадий без единиц работы — плавная оценка по времени, чтобы бар
+    /// не выглядел замершим.
+    fn stage_fraction(&self) -> f32 {
+        let snapshot = self.progress.snapshot();
+        let seconds = self.stage_elapsed().as_secs_f32();
+        match self.stage {
+            Stage::Idle => 0.0,
+            Stage::Done => 1.0,
+            Stage::Scan => {
+                if snapshot.scan_total > 0 {
+                    // Первые 5% — фаза обхода дерева (total ещё неизвестен),
+                    // дальше — реальный разбор файлов без скачка назад.
+                    0.05 + 0.95 * ratio(snapshot.scan_done, snapshot.scan_total)
+                } else {
+                    0.05 * smooth(seconds, 3.0)
+                }
+            }
+            Stage::Index => {
+                if snapshot.index_total > 0 {
+                    0.05 + 0.95 * ratio(snapshot.index_done, snapshot.index_total)
+                } else {
+                    0.05 * smooth(seconds, 3.0)
+                }
+            }
+            Stage::Plan => 0.95 * smooth(seconds, 40.0),
+            Stage::Generate => ratio(self.progress_done, self.progress_total),
+            Stage::Finalize => 0.9 * smooth(seconds, 4.0),
+        }
+    }
+
+    /// Общий прогресс пайплайна 0..100 с монотонным сглаживанием.
+    pub fn overall_percent(&self) -> f32 {
+        self.overall_percent
+    }
+
+    /// Пересчитать общий прогресс (вызывается по тику таймера и при смене стадии).
+    fn refresh_progress(&mut self) {
+        let computed = match self.stage {
+            Stage::Idle => 0.0,
+            Stage::Done => 100.0,
+            stage => {
+                let (start, end) = stage_range(stage);
+                start + (end - start) * self.stage_fraction()
+            }
+        };
+        if computed > self.overall_percent {
+            self.overall_percent = computed.min(100.0);
+        }
+    }
+
+    /// Отсчёт времени стадии начинается автоматически при её смене.
+    fn sync_stage_clock(&mut self) {
+        if self.stage != self.clock_stage {
+            self.clock_stage = self.stage;
+            self.stage_started_at = Some(Instant::now());
+            self.refresh_progress();
+        }
+    }
+
+    /// Приблизительная оценка времени до завершения всего пайплайна.
+    pub fn eta(&self) -> Option<Duration> {
+        if matches!(self.stage, Stage::Idle | Stage::Done) {
+            return None;
+        }
+        let elapsed = self.elapsed().as_secs_f32();
+        let overall = self.overall_percent;
+        let by_rate =
+            (overall >= 2.0 && elapsed >= 1.0).then(|| elapsed * (100.0 - overall) / overall);
+        let by_stages = Some(self.stage_remaining_seconds() + self.future_stage_seconds());
+
+        let seconds = match (by_rate, by_stages) {
+            (Some(rate), Some(stages)) => rate.max(stages),
+            (Some(rate), None) => rate,
+            (None, Some(stages)) => stages,
+            (None, None) => return None,
+        };
+        Some(Duration::from_secs_f32(seconds.clamp(1.0, 12.0 * 3600.0)))
+    }
+
+    /// Остаток текущей стадии по скорости её единиц работы.
+    fn stage_remaining_seconds(&self) -> f32 {
+        let snapshot = self.progress.snapshot();
+        let seconds = self.stage_elapsed().as_secs_f32();
+        match self.stage {
+            Stage::Scan => unit_remaining(snapshot.scan_done, snapshot.scan_total, seconds)
+                .unwrap_or_else(|| (seconds * 0.8).max(3.0)),
+            Stage::Index => {
+                unit_remaining(snapshot.index_done, snapshot.index_total, seconds).unwrap_or(20.0)
+            }
+            Stage::Plan => (90.0 - seconds).max(5.0),
+            Stage::Generate => {
+                unit_remaining(self.progress_done, self.progress_total, seconds).unwrap_or(30.0)
+            }
+            Stage::Finalize => (5.0 - seconds).max(2.0),
+            Stage::Idle | Stage::Done => 0.0,
+        }
+    }
+
+    /// Грубые приори для стадий, которые ещё впереди.
+    fn future_stage_seconds(&self) -> f32 {
+        match self.stage {
+            Stage::Scan => 20.0 + 90.0 + self.estimate_generate_seconds() + 3.0,
+            Stage::Index => 90.0 + self.estimate_generate_seconds() + 3.0,
+            Stage::Plan => self.estimate_generate_seconds() + 3.0,
+            Stage::Generate => 3.0,
+            Stage::Idle | Stage::Finalize | Stage::Done => 0.0,
+        }
+    }
+
+    /// Очень грубая оценка длительности генерации до появления плана.
+    fn estimate_generate_seconds(&self) -> f32 {
+        if let Some(stats) = self.site_stats.as_ref() {
+            if stats.components > 0 {
+                return stats.components as f32 * 45.0;
+            }
+        }
+        let components = (self.files_scanned / 4).max(3);
+        components as f32 * 45.0
     }
 
     /// Директория записи документации для текущего запуска.
@@ -427,6 +594,59 @@ impl App {
 /// Число из поля ввода с поддержкой запятой как десятичного разделителя.
 fn parse_f32(raw: &str) -> Option<f32> {
     raw.trim().replace(',', ".").parse().ok()
+}
+
+/// Диапазон общего прогресса (в процентах), который занимает стадия.
+fn stage_range(stage: Stage) -> (f32, f32) {
+    match stage {
+        Stage::Scan => (0.0, 20.0),
+        Stage::Index => (20.0, 50.0),
+        Stage::Plan => (50.0, 60.0),
+        Stage::Generate => (60.0, 95.0),
+        Stage::Finalize => (95.0, 100.0),
+        Stage::Idle => (0.0, 0.0),
+        Stage::Done => (100.0, 100.0),
+    }
+}
+
+/// Доля `done / total`, либо 0 при неизвестном `total`.
+fn ratio(done: usize, total: usize) -> f32 {
+    if total == 0 {
+        0.0
+    } else {
+        (done as f32 / total as f32).clamp(0.0, 1.0)
+    }
+}
+
+/// Плавно растущая доля от времени: 1 - e^(-t/tau).
+fn smooth(seconds: f32, tau: f32) -> f32 {
+    if seconds <= 0.0 {
+        0.0
+    } else {
+        (1.0 - (-seconds / tau.max(0.1)).exp()).clamp(0.0, 1.0)
+    }
+}
+
+/// Остаток времени по средней скорости обработки единиц работы.
+fn unit_remaining(done: usize, total: usize, seconds: f32) -> Option<f32> {
+    if done == 0 || total <= done || seconds < 1.0 {
+        return None;
+    }
+    let per_unit = seconds / done as f32;
+    Some(per_unit * (total - done) as f32)
+}
+
+/// Форматирование длительности для таймера: `00:42`, `12:05`, `1:02:03`.
+pub fn format_duration(duration: Duration) -> String {
+    let total = duration.as_secs();
+    let hours = total / 3600;
+    let minutes = (total % 3600) / 60;
+    let seconds = total % 60;
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes:02}:{seconds:02}")
+    }
 }
 
 /// Сохранение конфига без прерывания работы UI (ошибка — только в лог).
@@ -590,6 +810,14 @@ fn pick_folder(title: &str, start: Option<&Path>) -> Option<PathBuf> {
 
 /// Цикл обновления состояния (Elm-architecture update).
 pub fn update(app: &mut App, message: Message) -> Task<Message> {
+    let task = update_state(app, message);
+    // Смена стадии могла произойти в любом обработчике — здесь же
+    // перезапускается отсчёт времени стадии и обновляется общий прогресс.
+    app.sync_stage_clock();
+    task
+}
+
+fn update_state(app: &mut App, message: Message) -> Task<Message> {
     match message {
         // --- Навигация и темы ---
         Message::Navigate(screen) => {
@@ -813,6 +1041,12 @@ pub fn update(app: &mut App, message: Message) -> Task<Message> {
 
         // --- Генерация ---
         Message::Generate => {
+            // Пока пайплайн работает, повторный запуск не начинаем:
+            // иначе два прогона делили бы одни счётчики прогресса.
+            if !matches!(app.stage, Stage::Idle | Stage::Done) {
+                app.set_screen(Screen::Progress);
+                return Task::none();
+            }
             let raw = if !app.project_path.trim().is_empty() {
                 app.project_path.trim().to_string()
             } else {
@@ -847,8 +1081,13 @@ pub fn update(app: &mut App, message: Message) -> Task<Message> {
             app.status = None;
             app.set_screen(Screen::Progress);
             app.stage = Stage::Scan;
+            app.progress.reset();
+            app.started_at = Some(Instant::now());
+            app.stage_started_at = Some(Instant::now());
+            app.clock_stage = Stage::Scan;
+            app.overall_percent = 0.0;
             app.progress_done = 0;
-            app.progress_total = 1;
+            app.progress_total = 0;
             app.files_scanned = 0;
             app.index_chunks = 0;
             app.index_backend.clear();
@@ -859,17 +1098,30 @@ pub fn update(app: &mut App, message: Message) -> Task<Message> {
             app.written.clear();
             app.failures.clear();
 
+            // Сканирование — синхронная работа: уводим её в blocking-пул,
+            // чтобы тики таймера и отрисовка не ждали окончания обхода.
+            let counters = Arc::clone(&app.progress);
             Task::perform(
-                async move { pipeline::analyze_project(root).await },
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        pipeline::analyze_project_sync_with_progress(&root, Some(&counters))
+                    })
+                    .await
+                    .map_err(|e| format!("Сканирование прервано: {e}"))?
+                },
                 Message::AnalysisFinished,
             )
+        }
+        Message::Tick => {
+            app.refresh_progress();
+            Task::none()
         }
         Message::AnalysisFinished(Ok(analysis)) => {
             app.files_scanned = analysis.files_scanned;
             app.last_model = Some(analysis.model);
             app.stage = Stage::Index;
             app.progress_done = 0;
-            app.progress_total = 1;
+            app.progress_total = 0;
 
             let Some(model) = app.last_model.clone() else {
                 return Task::none();
@@ -883,8 +1135,9 @@ pub fn update(app: &mut App, message: Message) -> Task<Message> {
                     return Task::none();
                 }
             };
+            let counters = Arc::clone(&app.progress);
             Task::perform(
-                async move { site::build_index(&config, &model).await },
+                async move { site::build_index_with_progress(&config, &model, Some(&counters)).await },
                 Message::IndexFinished,
             )
         }
@@ -899,7 +1152,7 @@ pub fn update(app: &mut App, message: Message) -> Task<Message> {
             app.index_backend = stats.backend.clone();
             app.stage = Stage::Plan;
             app.progress_done = 0;
-            app.progress_total = 1;
+            app.progress_total = 0;
 
             let Some(model) = app.last_model.clone() else {
                 app.failures
@@ -1013,15 +1266,29 @@ pub fn view(app: &App) -> Element<'_, Message> {
 /// Размер встроенного RGBA-пиксельного файла иконки окна (`make_icon.py`).
 const WINDOW_ICON_SIZE: u32 = 128;
 
+/// Тики таймера нужны только пока идёт генерация и открыт экран прогресса.
+fn subscription(app: &App) -> iced::Subscription<Message> {
+    let running = matches!(app.screen(), Screen::Progress)
+        && app.started_at.is_some()
+        && !matches!(app.stage, Stage::Idle | Stage::Done);
+    if running {
+        iced::time::every(Duration::from_millis(500)).map(|_| Message::Tick)
+    } else {
+        iced::Subscription::none()
+    }
+}
+
 /// Запуск GUI-цикла iced с переданной конфигурацией.
 pub fn run(config: AppConfig) -> iced::Result {
-    let mut application = iced::application("DocCode", update, view).theme(|state: &App| {
-        if state.is_dark_theme() {
-            iced::Theme::Dark
-        } else {
-            iced::Theme::Light
-        }
-    });
+    let mut application = iced::application("DocCode", update, view)
+        .theme(|state: &App| {
+            if state.is_dark_theme() {
+                iced::Theme::Dark
+            } else {
+                iced::Theme::Light
+            }
+        })
+        .subscription(subscription);
 
     // Иконка окна вшита в бинарь: packaging/icon/make_icon.py → doccode-128.rgba.
     // Сырые пиксели, а не PNG — чтобы не тянуть декодер изображений в рантайм.
@@ -1048,4 +1315,48 @@ pub fn run(config: AppConfig) -> iced::Result {
         load_prompts_into(&mut app);
         (app, Task::none())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stage_ranges_are_contiguous_and_cover_all_progress() {
+        assert_eq!(stage_range(Stage::Scan).0, 0.0);
+        assert_eq!(stage_range(Stage::Scan).1, stage_range(Stage::Index).0);
+        assert_eq!(stage_range(Stage::Index).1, stage_range(Stage::Plan).0);
+        assert_eq!(stage_range(Stage::Plan).1, stage_range(Stage::Generate).0);
+        assert_eq!(
+            stage_range(Stage::Generate).1,
+            stage_range(Stage::Finalize).0
+        );
+        assert_eq!(stage_range(Stage::Finalize).1, 100.0);
+    }
+
+    #[test]
+    fn duration_formats_with_and_without_hours() {
+        assert_eq!(format_duration(Duration::from_secs(5)), "00:05");
+        assert_eq!(format_duration(Duration::from_secs(125)), "02:05");
+        assert_eq!(format_duration(Duration::from_secs(3723)), "1:02:03");
+    }
+
+    #[test]
+    fn idle_app_has_no_eta() {
+        let app = App::default();
+        assert!(app.eta().is_none());
+        assert_eq!(app.stage_percent(), 0.0);
+        assert_eq!(app.overall_percent(), 0.0);
+    }
+
+    #[test]
+    fn generate_fraction_uses_component_counters() {
+        let app = App {
+            stage: Stage::Generate,
+            progress_done: 2,
+            progress_total: 4,
+            ..App::default()
+        };
+        assert!((app.stage_percent() - 50.0).abs() < 0.01);
+    }
 }

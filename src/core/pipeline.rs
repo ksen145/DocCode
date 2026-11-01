@@ -10,6 +10,7 @@
 
 use crate::core::model::ProjectModel;
 use crate::core::parser::{get_parser_for_path, Entity};
+use crate::core::progress::ProgressCounters;
 use crate::core::scanner::scan_directory;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Component, Path, PathBuf};
@@ -41,12 +42,26 @@ pub fn relative_slash_path(root: &Path, path: &Path) -> String {
 /// Файлы, которые не удалось прочитать, пропускаются с предупреждением
 /// в лог (graceful degradation), а не прерывают весь анализ.
 pub fn analyze_project_sync(root: &Path) -> Result<Analysis, String> {
+    analyze_project_sync_with_progress(root, None)
+}
+
+/// То же, что [`analyze_project_sync`], но с отчётом о прогрессе для UI.
+///
+/// `progress` получает счётчики сканирования: сначала общее число файлов,
+/// затем по одному разобранному файлу.
+pub fn analyze_project_sync_with_progress(
+    root: &Path,
+    progress: Option<&ProgressCounters>,
+) -> Result<Analysis, String> {
     if !root.is_dir() {
         return Err(format!("Директория не найдена: {}", root.display()));
     }
 
     let files = scan_directory(root);
     let files_scanned = files.len();
+    if let Some(progress) = progress {
+        progress.set_scan_total(files_scanned);
+    }
 
     let mut entities: HashMap<String, Vec<Entity>> = HashMap::new();
     let mut project_files = BTreeSet::new();
@@ -54,6 +69,9 @@ pub fn analyze_project_sync(root: &Path) -> Result<Analysis, String> {
     for file in &files {
         let relative = relative_slash_path(root, &file.path);
         if relative.is_empty() {
+            if let Some(progress) = progress {
+                progress.advance_scan();
+            }
             continue;
         }
         project_files.insert(relative.clone());
@@ -62,6 +80,9 @@ pub fn analyze_project_sync(root: &Path) -> Result<Analysis, String> {
             Ok(content) => content,
             Err(e) => {
                 tracing::warn!("Не удалось прочитать {}: {}", file.path.display(), e);
+                if let Some(progress) = progress {
+                    progress.advance_scan();
+                }
                 continue;
             }
         };
@@ -74,6 +95,10 @@ pub fn analyze_project_sync(root: &Path) -> Result<Analysis, String> {
             if !parsed.is_empty() {
                 entities.insert(relative, parsed);
             }
+        }
+
+        if let Some(progress) = progress {
+            progress.advance_scan();
         }
     }
 

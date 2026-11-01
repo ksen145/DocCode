@@ -265,12 +265,22 @@ pub struct ComponentResult {
 
 /// Шаг 1: индексация кода в Qdrant.
 pub async fn build_index(config: &SiteConfig, model: &ProjectModel) -> Result<IndexStats, String> {
+    build_index_with_progress(config, model, None).await
+}
+
+/// Шаг 1 с отчётом о прогрессе индексации для UI.
+pub async fn build_index_with_progress(
+    config: &SiteConfig,
+    model: &ProjectModel,
+    progress: Option<&crate::core::progress::ProgressCounters>,
+) -> Result<IndexStats, String> {
     let client = make_client(&config.ai);
-    rag::build_index(
+    rag::build_index_with_progress(
         model,
         &config.project_root,
         client.as_ref(),
         &config.ai.embedding_model,
+        progress,
     )
     .await
 }

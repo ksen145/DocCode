@@ -3,4 +3,5 @@
 pub mod model;
 pub mod parser;
 pub mod pipeline;
+pub mod progress;
 pub mod scanner;

@@ -125,9 +125,24 @@ pub async fn build_index(
     embedder: &dyn AiClient,
     embedding_model: &str,
 ) -> Result<IndexStats, String> {
+    build_index_with_progress(model, root, embedder, embedding_model, None).await
+}
+
+/// То же, что [`build_index`], но с отчётом о прогрессе индексации для UI.
+pub async fn build_index_with_progress(
+    model: &ProjectModel,
+    root: &Path,
+    embedder: &dyn AiClient,
+    embedding_model: &str,
+    progress: Option<&crate::core::progress::ProgressCounters>,
+) -> Result<IndexStats, String> {
     let chunks = make_chunks(model, root);
     if chunks.is_empty() {
         return Err("Не найдено ни одного фрагмента кода для индексации".to_string());
+    }
+    let total = chunks.len().min(MAX_CHUNKS);
+    if let Some(progress) = progress {
+        progress.set_index_total(total);
     }
 
     let mut points = Vec::new();
@@ -146,6 +161,9 @@ pub async fn build_index(
                     first_error.get_or_insert_with(|| {
                         format!("размерность эмбеддинга {} != {}", vector.len(), dimension)
                     });
+                    if let Some(progress) = progress {
+                        progress.advance_index();
+                    }
                     continue;
                 }
                 points.push(VectorPoint {
@@ -163,6 +181,9 @@ pub async fn build_index(
                 skipped += 1;
                 first_error.get_or_insert(e);
             }
+        }
+        if let Some(progress) = progress {
+            progress.advance_index();
         }
     }
 
