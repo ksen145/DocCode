@@ -11,9 +11,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 /// Ответ модели с планом проекта.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RawPlan {
-    /// Краткое описание проекта (может быть пустым — обзор генерируется отдельно).
-    #[serde(default)]
-    pub summary: String,
     /// Точки входа, найденные моделью.
     #[serde(default, alias = "entrypoints")]
     pub entry_points: Vec<RawEntryPoint>,
@@ -52,11 +49,6 @@ impl RawComponent {
             files.extend(child.all_files());
         }
         files
-    }
-
-    /// Число файлов во всём поддереве.
-    pub fn file_count(&self) -> usize {
-        self.all_files().len()
     }
 }
 
@@ -161,12 +153,6 @@ pub fn fallback_plan(model: &ProjectModel) -> RawPlan {
         .collect();
 
     RawPlan {
-        summary: format!(
-            "{}: {} файлов, {} сущностей.",
-            model.name,
-            model.files.len().max(model.entities.len()),
-            model.all_entities().count()
-        ),
         entry_points: Vec::new(),
         components,
     }

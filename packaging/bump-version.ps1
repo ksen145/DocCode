@@ -7,7 +7,7 @@
     * NSIS-установщик (packaging/windows/build-installer.ps1);
     * Linux-пакеты (packaging/linux/build-linux.sh);
     * workflow релиза (.github/workflows/release.yml);
-    * код приложения (doccode::VERSION = env!("CARGO_PKG_VERSION")).
+    * код приложения (`env!("CARGO_PKG_VERSION")`).
 
   Скрипт проверяет semver, правит Cargo.toml и запись `doccode` в Cargo.lock
   (чтобы `cargo build --locked` в CI не ругался) и проверяет результат

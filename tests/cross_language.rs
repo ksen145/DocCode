@@ -1,6 +1,7 @@
 //! Сквозной тест: анализ мини-проекта (Python + JS + Rust) одним пайплайном.
 
 use doccode::core::pipeline::analyze_project_sync;
+use doccode::core::progress::ProgressCounters;
 
 /// Уникальный временный каталог для фикстуры (pid + метка времени).
 fn fixture_root() -> std::path::PathBuf {
@@ -58,7 +59,8 @@ async fn health() {}
     )
     .expect("записать lib.rs");
 
-    let analysis = analyze_project_sync(&root).expect("мини-проект должен анализироваться");
+    let analysis = analyze_project_sync(&root, &ProgressCounters::new())
+        .expect("мини-проект должен анализироваться");
 
     // Все три файла с поддерживаемыми языками просканированы.
     assert_eq!(analysis.files_scanned, 3);

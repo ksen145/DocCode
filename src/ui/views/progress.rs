@@ -1,9 +1,8 @@
 //! Экран прогресса: шаги пайплайна, прогресс-бар и живые счётчики.
 //!
-//! Прогресс показывается на двух уровнях: бар текущей стадии (0–100%) и общий
-//! бар пайплайна (0–100%). Рядом идут таймер с начала запуска и приблизительная
-//! оценка остатка. Значения обновляются подпиской на таймер (см. `app::run`),
-//! поэтому экран не выглядит зависшим даже на долгих стадиях без счётчиков.
+//! Прогресс стадии строится по реальным счётчикам (файлы, фрагменты,
+//! компоненты), рядом идёт таймер с начала запуска. Значения обновляются
+//! подпиской на таймер (см. `app::run`).
 
 use super::{card, page_header, palette, status_text};
 use crate::app::{format_duration, App, Message, Stage};
@@ -23,7 +22,6 @@ const STEPS: [Stage; 5] = [
 pub fn view(app: &App) -> Element<'_, Message> {
     let p = palette(app);
     let stage_percent = app.stage_percent().clamp(0.0, 100.0);
-    let overall_percent = app.overall_percent().clamp(0.0, 100.0);
 
     let mut steps = row![].spacing(7).width(Length::Fill);
     for (index, stage) in STEPS.iter().enumerate() {
@@ -60,14 +58,6 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .style(move |_| theme::inset(p))
     };
 
-    let remaining = match app.stage {
-        Stage::Done => "—".to_string(),
-        _ => app
-            .eta()
-            .map(|eta| format!("≈ {}", format_duration(eta)))
-            .unwrap_or_else(|| app.t("progress.estimating").to_string()),
-    };
-
     column![
         page_header(app, "progress.title", "progress.subtitle"),
         card(
@@ -96,26 +86,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 Space::with_height(4),
                 steps,
                 Space::with_height(6),
-                row![
-                    text(app.t("progress.overall"))
-                        .size(10)
-                        .font(SEMIBOLD)
-                        .color(p.muted),
-                    Space::with_width(Length::Fill),
-                    text(format!("{}%", overall_percent.round() as u32))
-                        .size(13)
-                        .font(SEMIBOLD)
-                        .color(p.text),
-                ],
-                progress_bar(0.0..=100.0, overall_percent)
-                    .height(13)
-                    .width(Length::Fill)
-                    .style(move |_| theme::progress(p)),
-                row![
-                    stat("progress.elapsed", format_duration(app.elapsed())),
-                    stat("progress.remaining", remaining),
-                ]
-                .spacing(12),
+                stat("progress.elapsed", format_duration(app.elapsed())),
             ]
             .spacing(11),
         ),

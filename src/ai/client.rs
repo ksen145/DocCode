@@ -1,7 +1,5 @@
-//! Trait AI-клиента (генерация текста, эмбеддинги, ping).
+//! Общие типы AI-клиента: очистка рассуждений и параметры генерации.
 
-use crate::ai::d1::{D1Request, D1Response};
-use async_trait::async_trait;
 use serde::Deserialize;
 
 /// Теги, в которые локальные модели иногда оборачивают цепочку рассуждений.
@@ -164,15 +162,6 @@ fn first_h1_start(text: &str, fences: &[(usize, usize)]) -> Option<usize> {
 pub struct GenerationResult {
     /// Сгенерированный текст.
     pub content: String,
-    /// Статистика использования (если бэкенд её отдаёт).
-    pub usage: Option<Usage>,
-}
-
-/// Статистика токенов.
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct Usage {
-    pub prompt_tokens: u32,
-    pub completion_tokens: u32,
 }
 
 /// Параметры генерации (из настроек приложения → запрос к LLM).
@@ -184,46 +173,6 @@ pub struct GenerateOptions {
     pub max_tokens: Option<u32>,
     /// Разрешить reasoning (`think` в Ollama); `None` — значение модели.
     pub think: Option<bool>,
-}
-
-impl GenerateOptions {
-    /// Параметры сэмплирования; `think` остаётся на усмотрение модели.
-    pub fn new(temperature: f32, max_tokens: u32) -> Self {
-        Self {
-            temperature: Some(temperature),
-            max_tokens: Some(max_tokens),
-            think: None,
-        }
-    }
-}
-
-/// Trait AI-клиента (объектно-безопасный — можно `Box<dyn AiClient>`).
-#[async_trait]
-pub trait AiClient: Send + Sync {
-    /// Генерация текста по промпту с параметрами (temperature/max_tokens).
-    async fn generate(
-        &self,
-        prompt: &str,
-        options: &GenerateOptions,
-    ) -> Result<GenerationResult, String>;
-
-    /// Получение эмбеддинга текста (по умолчанию — не поддерживается).
-    async fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
-        let _ = text;
-        Err("Эмбеддинги не поддерживаются этим бэкендом".to_string())
-    }
-
-    /// Проверка сгенерированного текста моделью D1 (Ollama `/v1/systemone`).
-    ///
-    /// По умолчанию не поддерживается: документация всё равно генерируется,
-    /// но помечается как непроверенная.
-    async fn verify(&self, request: &D1Request) -> Result<D1Response, String> {
-        let _ = request;
-        Err("Модель D1 не поддерживается этим бэкендом".to_string())
-    }
-
-    /// Проверка доступности сервиса.
-    async fn ping(&self) -> Result<(), String>;
 }
 
 #[cfg(test)]

@@ -1,56 +1,54 @@
 //! Настройки AI: подключение, модели, параметры генерации и политика D1.
 
 use super::{badge, card, field, page_header, palette, primary, secondary, status_line};
-use crate::app::{App, Message};
-use crate::ui::theme::{self, SEMIBOLD};
+use crate::app::{AiField, App, Message};
+use crate::ui::theme::{self, Palette, SEMIBOLD};
 use iced::widget::{checkbox, column, container, row, text, text_input, Space};
 use iced::{Alignment, Element, Length};
+
+/// Поле ввода настроек с общим оформлением.
+fn input<'a>(
+    p: Palette,
+    placeholder: &'a str,
+    value: &'a str,
+    on_input: impl Fn(String) -> Message + 'a,
+) -> Element<'a, Message> {
+    text_input(placeholder, value)
+        .on_input(on_input)
+        .padding([10.0, 11.0])
+        .size(13)
+        .width(Length::Fill)
+        .style(move |_, status| theme::input(p, status))
+        .into()
+}
 
 /// Содержимое экрана подключения к Ollama и параметров качества.
 pub fn view(app: &App) -> Element<'_, Message> {
     let p = palette(app);
 
-    let url_input = text_input("http://localhost:11434", &app.ai_url)
-        .on_input(Message::AiUrlChanged)
-        .padding([10.0, 11.0])
-        .size(13)
-        .width(Length::Fill)
-        .style(move |_, status| theme::input(p, status));
+    let url_input = input(p, "http://localhost:11434", &app.ai_url, |value| {
+        Message::AiFieldChanged(AiField::Url, value)
+    });
 
-    let model_input = text_input("gemma4:e4b", &app.ai_model)
-        .on_input(Message::AiModelChanged)
-        .padding([10.0, 11.0])
-        .size(13)
-        .width(Length::Fill)
-        .style(move |_, status| theme::input(p, status));
+    let model_input = input(p, "gemma4:e4b", &app.ai_model, |value| {
+        Message::AiFieldChanged(AiField::Model, value)
+    });
 
-    let embedding_input = text_input("nomic-embed-text", &app.ai_embedding_model)
-        .on_input(Message::AiEmbeddingModelChanged)
-        .padding([10.0, 11.0])
-        .size(13)
-        .width(Length::Fill)
-        .style(move |_, status| theme::input(p, status));
+    let embedding_input = input(p, "nomic-embed-text", &app.ai_embedding_model, |value| {
+        Message::AiFieldChanged(AiField::EmbeddingModel, value)
+    });
 
-    let d1_input = text_input("d1", &app.ai_d1_model)
-        .on_input(Message::AiD1ModelChanged)
-        .padding([10.0, 11.0])
-        .size(13)
-        .width(Length::Fill)
-        .style(move |_, status| theme::input(p, status));
+    let d1_input = input(p, "d1", &app.ai_d1_model, |value| {
+        Message::AiFieldChanged(AiField::D1Model, value)
+    });
 
-    let temperature_input = text_input("0.15", &app.ai_temperature)
-        .on_input(Message::AiTemperatureChanged)
-        .padding([10.0, 11.0])
-        .size(13)
-        .width(Length::Fill)
-        .style(move |_, status| theme::input(p, status));
+    let temperature_input = input(p, "0.15", &app.ai_temperature, |value| {
+        Message::AiFieldChanged(AiField::Temperature, value)
+    });
 
-    let max_tokens_input = text_input("4000", &app.ai_max_tokens)
-        .on_input(Message::AiMaxTokensChanged)
-        .padding([10.0, 11.0])
-        .size(13)
-        .width(Length::Fill)
-        .style(move |_, status| theme::input(p, status));
+    let max_tokens_input = input(p, "4000", &app.ai_max_tokens, |value| {
+        Message::AiFieldChanged(AiField::MaxTokens, value)
+    });
 
     let thinking = checkbox(app.t("ai.thinking").to_string(), app.ai_think)
         .size(18)
@@ -59,26 +57,17 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .style(move |_, status| theme::checkbox(p, status))
         .on_toggle(Message::ToggleAiThinking);
 
-    let factuality_input = text_input("0.85", &app.ai_d1_min_factuality)
-        .on_input(Message::AiD1FactualityChanged)
-        .padding([10.0, 11.0])
-        .size(13)
-        .width(Length::Fill)
-        .style(move |_, status| theme::input(p, status));
+    let factuality_input = input(p, "0.85", &app.ai_d1_min_factuality, |value| {
+        Message::AiFieldChanged(AiField::D1Factuality, value)
+    });
 
-    let completeness_input = text_input("3", &app.ai_d1_min_completeness)
-        .on_input(Message::AiD1CompletenessChanged)
-        .padding([10.0, 11.0])
-        .size(13)
-        .width(Length::Fill)
-        .style(move |_, status| theme::input(p, status));
+    let completeness_input = input(p, "3", &app.ai_d1_min_completeness, |value| {
+        Message::AiFieldChanged(AiField::D1Completeness, value)
+    });
 
-    let retries_input = text_input("1", &app.ai_d1_max_retries)
-        .on_input(Message::AiD1RetriesChanged)
-        .padding([10.0, 11.0])
-        .size(13)
-        .width(Length::Fill)
-        .style(move |_, status| theme::input(p, status));
+    let retries_input = input(p, "1", &app.ai_d1_max_retries, |value| {
+        Message::AiFieldChanged(AiField::D1Retries, value)
+    });
 
     let recommended = container(
         row![

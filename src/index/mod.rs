@@ -1,5 +1,4 @@
-//! Векторный индекс проекта: Qdrant Edge и in-memory fallback.
+//! Векторный индекс проекта (Qdrant Edge).
 
-#[cfg(feature = "qdrant")]
 pub mod qdrant_store;
 pub mod vector_store;

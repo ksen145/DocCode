@@ -6,39 +6,12 @@
 //! только после экранирования.
 
 use crate::docs::site::SiteDoc;
-use std::fmt::Write;
 
 /// Рендер всего сайта.
 pub fn render_site(doc: &SiteDoc) -> String {
     let data = serde_json::to_string(doc).unwrap_or_else(|_| "{}".to_string());
     let data = json_for_script(&data);
     let title = escape_html(&doc.project);
-    let generated = if doc.generated_at.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "<span class=\"generated\" data-generated=\"{}\"></span>",
-            escape_html(&doc.generated_at)
-        )
-    };
-    let overview = if doc.overview_html.is_empty() {
-        "<p class=\"muted\">Обзор проекта не сгенерирован.</p>".to_string()
-    } else {
-        doc.overview_html.clone()
-    };
-    let top_components = doc
-        .components
-        .iter()
-        .map(|component| {
-            format!(
-                "<a class=\"fallback-card\" href=\"#/component/{}\"><strong>{}</strong><span>{} файлов</span></a>",
-                escape_html(&component.id),
-                escape_html(&component.name),
-                component.all_files().len()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("");
 
     let mut html = String::with_capacity(data.len() + 32_768);
     html.push_str(
@@ -237,8 +210,6 @@ code, pre, .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", M
 .component-card:hover { border-color: var(--accent); text-decoration: none; }
 .component-card b { display: block; font-size: 13px; margin-bottom: 2px; }
 .component-card span { color: var(--muted); font-size: 11px; }
-.fallback-card { display: flex; justify-content: space-between; padding: 10px; border: 1px solid var(--border); border-radius: 9px; margin: 6px 0; color: var(--text); }
-.fallback-card span { color: var(--muted); font-size: 12px; }
 .breadcrumbs { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; margin-bottom: 12px; flex-wrap: wrap; }
 .breadcrumbs a { color: var(--muted); }
 .breadcrumbs .sep { opacity: .5; }
@@ -295,7 +266,6 @@ code, pre, .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", M
   transition: .2s ease; pointer-events: none;
 }
 .toast.show { opacity: 1; transform: translateY(0); }
-.generated::before { content: "сгенерировано "; }
 @media (max-width: 1000px) {
   .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .content { padding: 26px 24px 70px; }
@@ -355,41 +325,7 @@ code, pre, .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", M
   </aside>
   <main id="content" class="content">
     <div class="page">
-      <div class="hero">
-        <div>
-          <h1>"##,
-    );
-    html.push_str(&title);
-    html.push_str(
-        r##"</h1>
-          <p>Интерактивная документация, собранная по векторному индексу кода. Выберите компонент слева или начните с обзора.</p>
-        </div>
-        <span class="status-badge "##,
-    );
-    html.push_str(doc.overview_status.css());
-    html.push_str(r##"">"##);
-    html.push_str(doc.overview_status.label());
-    html.push_str(
-        r##"</span>
-      </div>
-      <div id="overview-server" class="markdown">"##,
-    );
-    html.push_str(&overview);
-    html.push_str(
-        r##"</div>
-      <div class="files-block">
-        <h2>Верхний уровень</h2>
-        <div class="component-grid">"##,
-    );
-    html.push_str(&top_components);
-    html.push_str(
-        r##"</div>
-      </div>
-      <p class="muted" style="margin-top:26px">"##,
-    );
-    html.push_str(&generated);
-    html.push_str(
-        r##"</p>
+      <noscript><p>Для интерактивной документации включите JavaScript.</p></noscript>
     </div>
   </main>
 </div>
@@ -550,7 +486,7 @@ const DATA = "##,
       ? '<div class="verify-line"><b>' + esc(DATA.overview_verification.note) + '</b></div>' : '';
     content.innerHTML = '<div class="page">' +
       '<div class="hero"><div><h1>' + esc(DATA.project) + '</h1>' +
-        '<p>Векторный индекс: ' + esc(s.index_backend || '—') + ' · ' + esc(s.chunks || 0) + ' фрагментов кода · ' + esc(s.files || 0) + ' файлов</p>' +
+        '<p>Векторный индекс: qdrant-edge · ' + esc(s.chunks || 0) + ' фрагментов кода · ' + esc(s.files || 0) + ' файлов</p>' +
       '</div>' + badge + '</div>' +
       statCards() + verification + projectMap() +
       '<article class="markdown">' + (DATA.overview_html || '<p class="muted">Обзор не сгенерирован.</p>') + '</article>' +
@@ -804,11 +740,6 @@ const DATA = "##,
     }
   });
 
-  $$('.generated').forEach(function (element) {
-    const value = Number(element.dataset.generated);
-    if (value > 0) element.textContent = new Date(value * 1000).toLocaleString();
-  });
-
   route();
 })();
 </script>
@@ -844,337 +775,58 @@ fn json_for_script(json: &str) -> String {
         .replace('\u{2029}', "\\u2029")
 }
 
-/// Минимальный Markdown → HTML.
+/// Markdown → HTML через pulldown-cmark.
 ///
-/// Поддерживаются заголовки, абзацы, списки, цитаты, таблицы, горизонтальные
-/// линии, fenced code и inline-разметка. Всё, что не распознано, остаётся
-/// экранированным текстом — LLM не может внедрить произвольный HTML.
+/// Сырой HTML из Markdown превращается в текст, ссылки с небезопасной схемой
+/// теряют href — LLM не может внедрить произвольный HTML/JS.
 pub fn markdown_to_html(markdown: &str) -> String {
-    let normalized = markdown.replace("\r\n", "\n");
-    let lines: Vec<&str> = normalized.lines().collect();
-    let mut out = String::new();
-    let mut index = 0usize;
+    use pulldown_cmark::{html, CowStr, Event, Options, Parser, Tag, TagEnd};
 
-    while index < lines.len() {
-        let line = lines[index];
-        let trimmed = line.trim();
-
-        if trimmed.is_empty() {
-            index += 1;
-            continue;
-        }
-
-        // Fenced code.
-        if let Some(fence) = trimmed.strip_prefix("```") {
-            let lang = fence.trim();
-            index += 1;
-            let mut code = String::new();
-            while index < lines.len() && !lines[index].trim_start().starts_with("```") {
-                code.push_str(lines[index]);
-                code.push('\n');
-                index += 1;
-            }
-            if index < lines.len() {
-                index += 1;
-            }
-            let class = if lang.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    " class=\"language-{}\"",
-                    lang.chars()
-                        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
-                        .collect::<String>()
-                )
-            };
-            let _ = writeln!(
-                out,
-                "<pre><code{}>{}</code></pre>",
-                class,
-                escape_html(&code)
-            );
-            continue;
-        }
-
-        // Headings.
-        if let Some((level, text)) = heading(trimmed) {
-            let _ = writeln!(out, "<h{level}>{}</h{level}>", inline(text));
-            index += 1;
-            continue;
-        }
-
-        // Horizontal rule.
-        if matches!(trimmed, "---" | "***" | "___") {
-            out.push_str("<hr>\n");
-            index += 1;
-            continue;
-        }
-
-        // Tables.
-        if trimmed.starts_with('|')
-            && index + 1 < lines.len()
-            && is_table_separator(lines[index + 1].trim())
-        {
-            index = render_table(&lines, index, &mut out);
-            continue;
-        }
-
-        // Unordered list.
-        if is_unordered_item(line) {
-            out.push_str("<ul>\n");
-            while index < lines.len() && is_unordered_item(lines[index]) {
-                let item = lines[index]
-                    .trim_start()
-                    .trim_start_matches(['-', '*', '+'])
-                    .trim();
-                let _ = writeln!(out, "<li>{}</li>", inline(item));
-                index += 1;
-            }
-            out.push_str("</ul>\n");
-            continue;
-        }
-
-        // Ordered list.
-        if let Some(item) = ordered_item(line) {
-            out.push_str("<ol>\n");
-            let _ = writeln!(out, "<li>{}</li>", inline(item));
-            index += 1;
-            while index < lines.len() {
-                if let Some(item) = ordered_item(lines[index]) {
-                    let _ = writeln!(out, "<li>{}</li>", inline(item));
-                    index += 1;
-                } else if lines[index].trim().is_empty() {
-                    index += 1;
+    let mut links: Vec<Option<String>> = Vec::new();
+    let events =
+        Parser::new_ext(markdown, Options::ENABLE_TABLES).filter_map(|event| match event {
+            Event::Html(text) | Event::InlineHtml(text) => Some(Event::Text(text)),
+            Event::Start(Tag::Link {
+                link_type,
+                dest_url,
+                title,
+                id,
+            }) => {
+                if safe_url(&dest_url) {
+                    links.push(None);
+                    Some(Event::Start(Tag::Link {
+                        link_type,
+                        dest_url,
+                        title,
+                        id,
+                    }))
                 } else {
-                    break;
+                    links.push(Some(dest_url.to_string()));
+                    None
                 }
             }
-            out.push_str("</ol>\n");
-            continue;
-        }
+            Event::End(TagEnd::Link) => match links.pop() {
+                Some(Some(url)) => Some(Event::Text(CowStr::Boxed(
+                    format!(" ({url})").into_boxed_str(),
+                ))),
+                _ => Some(Event::End(TagEnd::Link)),
+            },
+            other => Some(other),
+        });
 
-        // Blockquote.
-        if trimmed.starts_with('>') {
-            let mut quote = String::new();
-            while index < lines.len() && lines[index].trim_start().starts_with('>') {
-                let text = lines[index].trim_start().trim_start_matches('>').trim();
-                if !quote.is_empty() {
-                    quote.push(' ');
-                }
-                quote.push_str(text);
-                index += 1;
-            }
-            let _ = writeln!(out, "<blockquote>{}</blockquote>", inline(&quote));
-            continue;
-        }
-
-        // Paragraph: until a blank line or the start of another block.
-        let mut paragraph = String::new();
-        while index < lines.len() {
-            let current = lines[index];
-            let current_trimmed = current.trim();
-            if current_trimmed.is_empty()
-                || current_trimmed.starts_with("```")
-                || heading(current_trimmed).is_some()
-                || is_unordered_item(current)
-                || ordered_item(current).is_some()
-                || current_trimmed.starts_with('>')
-                || matches!(current_trimmed, "---" | "***" | "___")
-                || (current_trimmed.starts_with('|')
-                    && index + 1 < lines.len()
-                    && is_table_separator(lines[index + 1].trim()))
-            {
-                break;
-            }
-            if !paragraph.is_empty() {
-                paragraph.push(' ');
-            }
-            paragraph.push_str(current_trimmed);
-            index += 1;
-        }
-        if !paragraph.is_empty() {
-            let _ = writeln!(out, "<p>{}</p>", inline(&paragraph));
-        } else {
-            index += 1;
-        }
-    }
-
+    let mut out = String::with_capacity(markdown.len());
+    html::push_html(&mut out, events);
     out
 }
 
-fn heading(line: &str) -> Option<(usize, &str)> {
-    let hashes = line.chars().take_while(|c| *c == '#').count();
-    if (1..=6).contains(&hashes) && line.chars().nth(hashes) == Some(' ') {
-        Some((hashes, line[hashes..].trim()))
-    } else {
-        None
-    }
-}
-
-fn is_unordered_item(line: &str) -> bool {
-    let trimmed = line.trim_start();
-    let mut chars = trimmed.chars();
-    matches!(chars.next(), Some('-') | Some('*') | Some('+')) && chars.next() == Some(' ')
-}
-
-fn ordered_item(line: &str) -> Option<&str> {
-    let trimmed = line.trim_start();
-    let digits = trimmed.chars().take_while(|c| c.is_ascii_digit()).count();
-    if digits == 0 || !trimmed[digits..].starts_with(". ") {
-        return None;
-    }
-    Some(trimmed[digits + 2..].trim())
-}
-
-fn is_table_separator(line: &str) -> bool {
-    line.starts_with('|')
-        && line.ends_with('|')
-        && line.trim_matches('|').split('|').all(|cell| {
-            let cell = cell.trim();
-            !cell.is_empty() && cell.chars().all(|c| matches!(c, '-' | ':' | ' '))
-        })
-}
-
-fn table_cells(line: &str) -> Vec<&str> {
-    line.trim()
-        .trim_matches('|')
-        .split('|')
-        .map(str::trim)
-        .collect()
-}
-
-fn render_table(lines: &[&str], start: usize, out: &mut String) -> usize {
-    let headers = table_cells(lines[start]);
-    let mut index = start + 2;
-    out.push_str("<table>\n<thead><tr>");
-    for header in &headers {
-        let _ = write!(out, "<th>{}</th>", inline(header));
-    }
-    out.push_str("</tr></thead>\n<tbody>\n");
-    while index < lines.len() && lines[index].trim().starts_with('|') {
-        out.push_str("<tr>");
-        for cell in table_cells(lines[index]) {
-            let _ = write!(out, "<td>{}</td>", inline(cell));
-        }
-        out.push_str("</tr>\n");
-        index += 1;
-    }
-    out.push_str("</tbody>\n</table>\n");
-    index
-}
-
-/// Inline-разметка. Входные данные сначала экранируются.
-fn inline(text: &str) -> String {
-    inline_escaped(&escape_html(text))
-}
-
-fn inline_escaped(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = String::with_capacity(text.len());
-    let mut index = 0usize;
-
-    while index < chars.len() {
-        match chars[index] {
-            '`' => {
-                if let Some(end) = find_char(&chars, index + 1, '`') {
-                    out.push_str("<code>");
-                    out.extend(&chars[index + 1..end]);
-                    out.push_str("</code>");
-                    index = end + 1;
-                } else {
-                    out.push('`');
-                    index += 1;
-                }
-            }
-            '*' if chars.get(index + 1) == Some(&'*') => {
-                if let Some(end) = find_pair(&chars, index + 2, '*', '*') {
-                    out.push_str("<strong>");
-                    out.push_str(&inline_escaped(
-                        &chars[index + 2..end].iter().collect::<String>(),
-                    ));
-                    out.push_str("</strong>");
-                    index = end + 2;
-                } else {
-                    out.push('*');
-                    index += 1;
-                }
-            }
-            '*' => {
-                if let Some(end) = find_char(&chars, index + 1, '*') {
-                    out.push_str("<em>");
-                    out.push_str(&inline_escaped(
-                        &chars[index + 1..end].iter().collect::<String>(),
-                    ));
-                    out.push_str("</em>");
-                    index = end + 1;
-                } else {
-                    out.push('*');
-                    index += 1;
-                }
-            }
-            '[' => {
-                if let Some((label, url, end)) = parse_link(&chars, index) {
-                    match url {
-                        Some(url) => {
-                            out.push_str("<a href=\"");
-                            // Текст уже экранирован: повторное экранирование
-                            // превратило бы `&amp;` в `&amp;amp;`.
-                            out.push_str(&url);
-                            out.push_str("\" rel=\"noreferrer noopener\">");
-                            out.push_str(&inline_escaped(&label));
-                            out.push_str("</a>");
-                        }
-                        None => out.push_str(&label),
-                    }
-                    index = end;
-                } else {
-                    out.push('[');
-                    index += 1;
-                }
-            }
-            ch => {
-                out.push(ch);
-                index += 1;
-            }
-        }
-    }
-
-    out
-}
-
-fn find_char(chars: &[char], start: usize, needle: char) -> Option<usize> {
-    (start..chars.len()).find(|index| chars[*index] == needle)
-}
-
-fn find_pair(chars: &[char], start: usize, first: char, second: char) -> Option<usize> {
-    let mut index = start;
-    while index + 1 < chars.len() {
-        if chars[index] == first && chars[index + 1] == second {
-            return Some(index);
-        }
-        index += 1;
-    }
-    None
-}
-
-fn parse_link(chars: &[char], start: usize) -> Option<(String, Option<String>, usize)> {
-    let close_label = find_char(chars, start + 1, ']')?;
-    if chars.get(close_label + 1) != Some(&'(') {
-        return None;
-    }
-    let close_url = find_char(chars, close_label + 2, ')')?;
-    let label: String = chars[start + 1..close_label].iter().collect();
-    let url: String = chars[close_label + 2..close_url].iter().collect();
-    let lower = url.to_ascii_lowercase();
-    let safe = lower.starts_with("http://")
+/// Схемы, которые разрешено превращать в ссылку.
+fn safe_url(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    lower.starts_with("http://")
         || lower.starts_with("https://")
         || lower.starts_with("mailto:")
         || lower.starts_with('#')
-        || lower.starts_with('/');
-    if !safe {
-        return Some((format!("{label} ({url})"), None, close_url + 1));
-    }
-    Some((label, Some(url), close_url + 1))
+        || lower.starts_with('/')
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@
 //! `Scan → Index (Qdrant) → Plan (LLM + overview) → Generate (по компонентам,
 //! D1-проверка) → Finalize (index.html) → Results`.
 
-use crate::ai::make_client;
+use crate::ai::ollama::OllamaClient;
 use crate::config::{AiBackendConfig, AppConfig, D1Config, GenerationConfig, ThemeMode};
 use crate::core::model::ProjectModel;
 use crate::core::pipeline;
@@ -116,12 +116,6 @@ pub struct App {
     pub progress: Arc<ProgressCounters>,
     /// Момент старта текущего запуска (для таймера).
     pub started_at: Option<Instant>,
-    /// Момент старта текущей стадии (для оценки остатка).
-    stage_started_at: Option<Instant>,
-    /// Стадия, для которой уже взят отсчёт времени.
-    clock_stage: Stage,
-    /// Сглаженный общий прогресс 0..100 (не уменьшается, чтобы бар не прыгал).
-    pub overall_percent: f32,
     /// Завершено единиц работы (компонентов).
     pub progress_done: usize,
     /// Всего единиц работы.
@@ -130,8 +124,6 @@ pub struct App {
     pub files_scanned: usize,
     /// Проиндексировано векторных фрагментов.
     pub index_chunks: usize,
-    /// Бэкенд индекса (qdrant-edge / in-memory).
-    pub index_backend: String,
     /// Очередь id компонентов, ожидающих генерации.
     pub pending: Vec<String>,
     /// Модель последнего анализа (нужна для плана и индексации).
@@ -183,14 +175,10 @@ impl Default for App {
             stage: Stage::Idle,
             progress: Arc::new(ProgressCounters::new()),
             started_at: None,
-            stage_started_at: None,
-            clock_stage: Stage::Idle,
-            overall_percent: 0.0,
             progress_done: 0,
             progress_total: 0,
             files_scanned: 0,
             index_chunks: 0,
-            index_backend: String::new(),
             pending: Vec::new(),
             last_model: None,
             site_draft: None,
@@ -212,6 +200,20 @@ pub enum Screen {
     Results,
 }
 
+/// Текстовое поле настроек AI (для общего сообщения об изменении).
+#[derive(Debug, Clone, Copy)]
+pub enum AiField {
+    Url,
+    Model,
+    EmbeddingModel,
+    D1Model,
+    Temperature,
+    MaxTokens,
+    D1Factuality,
+    D1Completeness,
+    D1Retries,
+}
+
 /// Сообщения UI (Elm-цикл: view → update → Task).
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -229,16 +231,8 @@ pub enum Message {
     ToggleD1Verification(bool),
 
     // --- Подключение к Ollama ---
-    AiUrlChanged(String),
-    AiModelChanged(String),
-    AiEmbeddingModelChanged(String),
-    AiD1ModelChanged(String),
-    AiTemperatureChanged(String),
-    AiMaxTokensChanged(String),
+    AiFieldChanged(AiField, String),
     ToggleAiThinking(bool),
-    AiD1FactualityChanged(String),
-    AiD1CompletenessChanged(String),
-    AiD1RetriesChanged(String),
     SaveAi,
     TestAi,
     AiTestFinished(Result<(), String>),
@@ -264,49 +258,36 @@ pub enum Message {
 }
 
 impl App {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Приложение с загруженной конфигурацией (черновики полей заполняются из неё).
     pub fn with_config(config: AppConfig) -> Self {
-        let ai = config.ai_backend.clone();
-        let generation = config.generation.clone();
-        let d1 = config.d1.clone();
-        let lang = Lang::from_code(&config.lang);
-        let mut app = Self {
-            config,
-            lang,
-            project_path: String::new(),
-            docs_path: String::new(),
-            ai_url: ai
-                .base_url
-                .clone()
-                .unwrap_or_else(|| "http://localhost:11434".to_string()),
-            ai_model: ai.model.clone(),
-            ai_embedding_model: ai.embedding_model.clone(),
-            ai_d1_model: ai.d1_model.clone(),
-            ai_temperature: generation.temperature.to_string(),
-            ai_max_tokens: generation.max_tokens.to_string(),
-            ai_think: generation.think,
-            ai_d1_min_factuality: d1.min_factuality.to_string(),
-            ai_d1_min_completeness: d1.min_completeness.to_string(),
-            ai_d1_max_retries: d1.max_retries.to_string(),
-            ..Default::default()
-        };
-        app.resolved_dark = app.config.theme.is_dark();
-        app.project_path = app
-            .config
+        let mut app = Self::default();
+        app.lang = Lang::from_code(&config.lang);
+        app.ai_url = config
+            .ai_backend
+            .base_url
+            .clone()
+            .unwrap_or_else(|| "http://localhost:11434".to_string());
+        app.ai_model = config.ai_backend.model.clone();
+        app.ai_embedding_model = config.ai_backend.embedding_model.clone();
+        app.ai_d1_model = config.ai_backend.d1_model.clone();
+        app.ai_temperature = config.generation.temperature.to_string();
+        app.ai_max_tokens = config.generation.max_tokens.to_string();
+        app.ai_think = config.generation.think;
+        app.ai_d1_min_factuality = config.d1.min_factuality.to_string();
+        app.ai_d1_min_completeness = config.d1.min_completeness.to_string();
+        app.ai_d1_max_retries = config.d1.max_retries.to_string();
+        app.project_path = config
             .project_path
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_default();
-        app.docs_path = app
-            .config
+        app.docs_path = config
             .docs_path
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_default();
+        app.resolved_dark = config.theme.is_dark();
+        app.config = config;
         app
     }
 
@@ -342,139 +323,22 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Время с начала текущей стадии.
-    fn stage_elapsed(&self) -> Duration {
-        self.stage_started_at
-            .map(|start| start.elapsed())
-            .unwrap_or_default()
-    }
-
     /// Прогресс текущей стадии в процентах (0..100).
     pub fn stage_percent(&self) -> f32 {
         self.stage_fraction() * 100.0
     }
 
-    /// Доля текущей стадии от 0 до 1.
-    ///
-    /// Для сканирования/индексации/генерации берутся реальные счётчики,
-    /// для стадий без единиц работы — плавная оценка по времени, чтобы бар
-    /// не выглядел замершим.
+    /// Доля текущей стадии от 0 до 1 по реальным счётчикам.
     fn stage_fraction(&self) -> f32 {
         let snapshot = self.progress.snapshot();
-        let seconds = self.stage_elapsed().as_secs_f32();
         match self.stage {
             Stage::Idle => 0.0,
             Stage::Done => 1.0,
-            Stage::Scan => {
-                if snapshot.scan_total > 0 {
-                    // Первые 5% — фаза обхода дерева (total ещё неизвестен),
-                    // дальше — реальный разбор файлов без скачка назад.
-                    0.05 + 0.95 * ratio(snapshot.scan_done, snapshot.scan_total)
-                } else {
-                    0.05 * smooth(seconds, 3.0)
-                }
-            }
-            Stage::Index => {
-                if snapshot.index_total > 0 {
-                    0.05 + 0.95 * ratio(snapshot.index_done, snapshot.index_total)
-                } else {
-                    0.05 * smooth(seconds, 3.0)
-                }
-            }
-            Stage::Plan => 0.95 * smooth(seconds, 40.0),
+            Stage::Scan => ratio(snapshot.scan_done, snapshot.scan_total),
+            Stage::Index => ratio(snapshot.index_done, snapshot.index_total),
             Stage::Generate => ratio(self.progress_done, self.progress_total),
-            Stage::Finalize => 0.9 * smooth(seconds, 4.0),
+            Stage::Plan | Stage::Finalize => 0.0,
         }
-    }
-
-    /// Общий прогресс пайплайна 0..100 с монотонным сглаживанием.
-    pub fn overall_percent(&self) -> f32 {
-        self.overall_percent
-    }
-
-    /// Пересчитать общий прогресс (вызывается по тику таймера и при смене стадии).
-    fn refresh_progress(&mut self) {
-        let computed = match self.stage {
-            Stage::Idle => 0.0,
-            Stage::Done => 100.0,
-            stage => {
-                let (start, end) = stage_range(stage);
-                start + (end - start) * self.stage_fraction()
-            }
-        };
-        if computed > self.overall_percent {
-            self.overall_percent = computed.min(100.0);
-        }
-    }
-
-    /// Отсчёт времени стадии начинается автоматически при её смене.
-    fn sync_stage_clock(&mut self) {
-        if self.stage != self.clock_stage {
-            self.clock_stage = self.stage;
-            self.stage_started_at = Some(Instant::now());
-            self.refresh_progress();
-        }
-    }
-
-    /// Приблизительная оценка времени до завершения всего пайплайна.
-    pub fn eta(&self) -> Option<Duration> {
-        if matches!(self.stage, Stage::Idle | Stage::Done) {
-            return None;
-        }
-        let elapsed = self.elapsed().as_secs_f32();
-        let overall = self.overall_percent;
-        let by_rate =
-            (overall >= 2.0 && elapsed >= 1.0).then(|| elapsed * (100.0 - overall) / overall);
-        let by_stages = Some(self.stage_remaining_seconds() + self.future_stage_seconds());
-
-        let seconds = match (by_rate, by_stages) {
-            (Some(rate), Some(stages)) => rate.max(stages),
-            (Some(rate), None) => rate,
-            (None, Some(stages)) => stages,
-            (None, None) => return None,
-        };
-        Some(Duration::from_secs_f32(seconds.clamp(1.0, 12.0 * 3600.0)))
-    }
-
-    /// Остаток текущей стадии по скорости её единиц работы.
-    fn stage_remaining_seconds(&self) -> f32 {
-        let snapshot = self.progress.snapshot();
-        let seconds = self.stage_elapsed().as_secs_f32();
-        match self.stage {
-            Stage::Scan => unit_remaining(snapshot.scan_done, snapshot.scan_total, seconds)
-                .unwrap_or_else(|| (seconds * 0.8).max(3.0)),
-            Stage::Index => {
-                unit_remaining(snapshot.index_done, snapshot.index_total, seconds).unwrap_or(20.0)
-            }
-            Stage::Plan => (90.0 - seconds).max(5.0),
-            Stage::Generate => {
-                unit_remaining(self.progress_done, self.progress_total, seconds).unwrap_or(30.0)
-            }
-            Stage::Finalize => (5.0 - seconds).max(2.0),
-            Stage::Idle | Stage::Done => 0.0,
-        }
-    }
-
-    /// Грубые приори для стадий, которые ещё впереди.
-    fn future_stage_seconds(&self) -> f32 {
-        match self.stage {
-            Stage::Scan => 20.0 + 90.0 + self.estimate_generate_seconds() + 3.0,
-            Stage::Index => 90.0 + self.estimate_generate_seconds() + 3.0,
-            Stage::Plan => self.estimate_generate_seconds() + 3.0,
-            Stage::Generate => 3.0,
-            Stage::Idle | Stage::Finalize | Stage::Done => 0.0,
-        }
-    }
-
-    /// Очень грубая оценка длительности генерации до появления плана.
-    fn estimate_generate_seconds(&self) -> f32 {
-        if let Some(stats) = self.site_stats.as_ref() {
-            if stats.components > 0 {
-                return stats.components as f32 * 45.0;
-            }
-        }
-        let components = (self.files_scanned / 4).max(3);
-        components as f32 * 45.0
     }
 
     /// Директория записи документации для текущего запуска.
@@ -596,19 +460,6 @@ fn parse_f32(raw: &str) -> Option<f32> {
     raw.trim().replace(',', ".").parse().ok()
 }
 
-/// Диапазон общего прогресса (в процентах), который занимает стадия.
-fn stage_range(stage: Stage) -> (f32, f32) {
-    match stage {
-        Stage::Scan => (0.0, 20.0),
-        Stage::Index => (20.0, 50.0),
-        Stage::Plan => (50.0, 60.0),
-        Stage::Generate => (60.0, 95.0),
-        Stage::Finalize => (95.0, 100.0),
-        Stage::Idle => (0.0, 0.0),
-        Stage::Done => (100.0, 100.0),
-    }
-}
-
 /// Доля `done / total`, либо 0 при неизвестном `total`.
 fn ratio(done: usize, total: usize) -> f32 {
     if total == 0 {
@@ -616,24 +467,6 @@ fn ratio(done: usize, total: usize) -> f32 {
     } else {
         (done as f32 / total as f32).clamp(0.0, 1.0)
     }
-}
-
-/// Плавно растущая доля от времени: 1 - e^(-t/tau).
-fn smooth(seconds: f32, tau: f32) -> f32 {
-    if seconds <= 0.0 {
-        0.0
-    } else {
-        (1.0 - (-seconds / tau.max(0.1)).exp()).clamp(0.0, 1.0)
-    }
-}
-
-/// Остаток времени по средней скорости обработки единиц работы.
-fn unit_remaining(done: usize, total: usize, seconds: f32) -> Option<f32> {
-    if done == 0 || total <= done || seconds < 1.0 {
-        return None;
-    }
-    let per_unit = seconds / done as f32;
-    Some(per_unit * (total - done) as f32)
 }
 
 /// Форматирование длительности для таймера: `00:42`, `12:05`, `1:02:03`.
@@ -687,23 +520,22 @@ fn load_prompts_into(app: &mut App) {
     }
 }
 
+/// Завершить запуск с ошибкой: показать результаты с записью в списке ошибок.
+fn fail(app: &mut App, error: String) -> Task<Message> {
+    app.failures.push(error);
+    app.stage = Stage::Done;
+    app.set_screen(Screen::Results);
+    Task::none()
+}
+
 /// Финализация черновика в `index.html`.
 fn finalize_draft(app: &mut App) -> Task<Message> {
     let Some(mut draft) = app.site_draft.take() else {
-        app.failures
-            .push("Внутренняя ошибка: черновик сайта потерян".to_string());
-        app.stage = Stage::Done;
-        app.set_screen(Screen::Results);
-        return Task::none();
+        return fail(app, "Внутренняя ошибка: черновик сайта потерян".to_string());
     };
     let config = match app.site_config() {
         Ok(config) => config,
-        Err(e) => {
-            app.failures.push(e);
-            app.stage = Stage::Done;
-            app.set_screen(Screen::Results);
-            return Task::none();
-        }
+        Err(e) => return fail(app, e),
     };
     app.stage = Stage::Finalize;
     Task::perform(
@@ -722,11 +554,7 @@ fn start_next_component(app: &mut App) -> Task<Message> {
     app.pending.remove(0);
 
     let Some(draft) = app.site_draft.as_ref() else {
-        app.failures
-            .push("Внутренняя ошибка: черновик сайта потерян".to_string());
-        app.stage = Stage::Done;
-        app.set_screen(Screen::Results);
-        return Task::none();
+        return fail(app, "Внутренняя ошибка: черновик сайта потерян".to_string());
     };
     let Some(component) = site::find_component(&draft.doc.components, &id).cloned() else {
         app.failures
@@ -737,12 +565,7 @@ fn start_next_component(app: &mut App) -> Task<Message> {
     let all_files: HashSet<String> = draft.doc.files.iter().map(|f| f.path.clone()).collect();
     let config = match app.site_config() {
         Ok(config) => config,
-        Err(e) => {
-            app.failures.push(e);
-            app.stage = Stage::Done;
-            app.set_screen(Screen::Results);
-            return Task::none();
-        }
+        Err(e) => return fail(app, e),
     };
 
     let task_id = id.clone();
@@ -810,14 +633,6 @@ fn pick_folder(title: &str, start: Option<&Path>) -> Option<PathBuf> {
 
 /// Цикл обновления состояния (Elm-architecture update).
 pub fn update(app: &mut App, message: Message) -> Task<Message> {
-    let task = update_state(app, message);
-    // Смена стадии могла произойти в любом обработчике — здесь же
-    // перезапускается отсчёт времени стадии и обновляется общий прогресс.
-    app.sync_stage_clock();
-    task
-}
-
-fn update_state(app: &mut App, message: Message) -> Task<Message> {
     match message {
         // --- Навигация и темы ---
         Message::Navigate(screen) => {
@@ -913,53 +728,23 @@ fn update_state(app: &mut App, message: Message) -> Task<Message> {
         }
 
         // --- Подключение к Ollama ---
-        Message::AiUrlChanged(value) => {
-            app.ai_url = value;
-            app.ai_status = None;
-            Task::none()
-        }
-        Message::AiModelChanged(value) => {
-            app.ai_model = value;
-            app.ai_status = None;
-            Task::none()
-        }
-        Message::AiEmbeddingModelChanged(value) => {
-            app.ai_embedding_model = value;
-            app.ai_status = None;
-            Task::none()
-        }
-        Message::AiD1ModelChanged(value) => {
-            app.ai_d1_model = value;
-            app.ai_status = None;
-            Task::none()
-        }
-        Message::AiTemperatureChanged(value) => {
-            app.ai_temperature = value;
-            app.ai_status = None;
-            Task::none()
-        }
-        Message::AiMaxTokensChanged(value) => {
-            app.ai_max_tokens = value;
+        Message::AiFieldChanged(field, value) => {
+            match field {
+                AiField::Url => app.ai_url = value,
+                AiField::Model => app.ai_model = value,
+                AiField::EmbeddingModel => app.ai_embedding_model = value,
+                AiField::D1Model => app.ai_d1_model = value,
+                AiField::Temperature => app.ai_temperature = value,
+                AiField::MaxTokens => app.ai_max_tokens = value,
+                AiField::D1Factuality => app.ai_d1_min_factuality = value,
+                AiField::D1Completeness => app.ai_d1_min_completeness = value,
+                AiField::D1Retries => app.ai_d1_max_retries = value,
+            }
             app.ai_status = None;
             Task::none()
         }
         Message::ToggleAiThinking(enabled) => {
             app.ai_think = enabled;
-            app.ai_status = None;
-            Task::none()
-        }
-        Message::AiD1FactualityChanged(value) => {
-            app.ai_d1_min_factuality = value;
-            app.ai_status = None;
-            Task::none()
-        }
-        Message::AiD1CompletenessChanged(value) => {
-            app.ai_d1_min_completeness = value;
-            app.ai_status = None;
-            Task::none()
-        }
-        Message::AiD1RetriesChanged(value) => {
-            app.ai_d1_max_retries = value;
             app.ai_status = None;
             Task::none()
         }
@@ -989,7 +774,7 @@ fn update_state(app: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::TestAi => {
-            let client = make_client(&app.draft_ai_backend());
+            let client = OllamaClient::from_config(&app.draft_ai_backend());
             app.ai_status = Some(app.t("ai.testing").to_string());
             Task::perform(async move { client.ping().await }, Message::AiTestFinished)
         }
@@ -1083,14 +868,10 @@ fn update_state(app: &mut App, message: Message) -> Task<Message> {
             app.stage = Stage::Scan;
             app.progress.reset();
             app.started_at = Some(Instant::now());
-            app.stage_started_at = Some(Instant::now());
-            app.clock_stage = Stage::Scan;
-            app.overall_percent = 0.0;
             app.progress_done = 0;
             app.progress_total = 0;
             app.files_scanned = 0;
             app.index_chunks = 0;
-            app.index_backend.clear();
             app.pending.clear();
             app.last_model = None;
             app.site_draft = None;
@@ -1104,7 +885,7 @@ fn update_state(app: &mut App, message: Message) -> Task<Message> {
             Task::perform(
                 async move {
                     tokio::task::spawn_blocking(move || {
-                        pipeline::analyze_project_sync_with_progress(&root, Some(&counters))
+                        pipeline::analyze_project_sync(&root, &counters)
                     })
                     .await
                     .map_err(|e| format!("Сканирование прервано: {e}"))?
@@ -1112,10 +893,7 @@ fn update_state(app: &mut App, message: Message) -> Task<Message> {
                 Message::AnalysisFinished,
             )
         }
-        Message::Tick => {
-            app.refresh_progress();
-            Task::none()
-        }
+        Message::Tick => Task::none(),
         Message::AnalysisFinished(Ok(analysis)) => {
             app.files_scanned = analysis.files_scanned;
             app.last_model = Some(analysis.model);
@@ -1128,59 +906,37 @@ fn update_state(app: &mut App, message: Message) -> Task<Message> {
             };
             let config = match app.site_config() {
                 Ok(config) => config,
-                Err(e) => {
-                    app.failures.push(e);
-                    app.stage = Stage::Done;
-                    app.set_screen(Screen::Results);
-                    return Task::none();
-                }
+                Err(e) => return fail(app, e),
             };
             let counters = Arc::clone(&app.progress);
             Task::perform(
-                async move { site::build_index_with_progress(&config, &model, Some(&counters)).await },
+                async move { site::build_index(&config, &model, &counters).await },
                 Message::IndexFinished,
             )
         }
-        Message::AnalysisFinished(Err(e)) => {
-            app.stage = Stage::Done;
-            app.failures.push(e);
-            app.set_screen(Screen::Results);
-            Task::none()
-        }
+        Message::AnalysisFinished(Err(e)) => fail(app, e),
         Message::IndexFinished(Ok(stats)) => {
             app.index_chunks = stats.chunks;
-            app.index_backend = stats.backend.clone();
             app.stage = Stage::Plan;
             app.progress_done = 0;
             app.progress_total = 0;
 
             let Some(model) = app.last_model.clone() else {
-                app.failures
-                    .push("Внутренняя ошибка: модель проекта потеряна".to_string());
-                app.stage = Stage::Done;
-                app.set_screen(Screen::Results);
-                return Task::none();
+                return fail(
+                    app,
+                    "Внутренняя ошибка: модель проекта потеряна".to_string(),
+                );
             };
             let config = match app.site_config() {
                 Ok(config) => config,
-                Err(e) => {
-                    app.failures.push(e);
-                    app.stage = Stage::Done;
-                    app.set_screen(Screen::Results);
-                    return Task::none();
-                }
+                Err(e) => return fail(app, e),
             };
             Task::perform(
                 async move { site::plan_site(&config, &model, &stats).await },
                 |result| Message::SitePlanned(result.map(Box::new)),
             )
         }
-        Message::IndexFinished(Err(e)) => {
-            app.stage = Stage::Done;
-            app.failures.push(e);
-            app.set_screen(Screen::Results);
-            Task::none()
-        }
+        Message::IndexFinished(Err(e)) => fail(app, e),
         Message::SitePlanned(Ok(draft)) => {
             let draft = *draft;
             app.pending = draft.pending.clone();
@@ -1191,12 +947,7 @@ fn update_state(app: &mut App, message: Message) -> Task<Message> {
             app.progress_total = app.pending.len();
             start_next_component(app)
         }
-        Message::SitePlanned(Err(e)) => {
-            app.stage = Stage::Done;
-            app.failures.push(e);
-            app.set_screen(Screen::Results);
-            Task::none()
-        }
+        Message::SitePlanned(Err(e)) => fail(app, e),
         Message::ComponentFinished(_id, Ok(result)) => {
             if let Some(draft) = app.site_draft.as_mut() {
                 site::apply_component_result(draft, *result);
@@ -1220,12 +971,7 @@ fn update_state(app: &mut App, message: Message) -> Task<Message> {
             app.set_screen(Screen::Results);
             Task::none()
         }
-        Message::SiteFinished(Err(e)) => {
-            app.stage = Stage::Done;
-            app.failures.push(e);
-            app.set_screen(Screen::Results);
-            Task::none()
-        }
+        Message::SiteFinished(Err(e)) => fail(app, e),
         Message::OpenSite => match app.written.first().cloned() {
             Some(path) => Task::perform(async move { open_path(&path) }, Message::OpenSiteFinished),
             None => {
@@ -1322,19 +1068,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stage_ranges_are_contiguous_and_cover_all_progress() {
-        assert_eq!(stage_range(Stage::Scan).0, 0.0);
-        assert_eq!(stage_range(Stage::Scan).1, stage_range(Stage::Index).0);
-        assert_eq!(stage_range(Stage::Index).1, stage_range(Stage::Plan).0);
-        assert_eq!(stage_range(Stage::Plan).1, stage_range(Stage::Generate).0);
-        assert_eq!(
-            stage_range(Stage::Generate).1,
-            stage_range(Stage::Finalize).0
-        );
-        assert_eq!(stage_range(Stage::Finalize).1, 100.0);
-    }
-
-    #[test]
     fn duration_formats_with_and_without_hours() {
         assert_eq!(format_duration(Duration::from_secs(5)), "00:05");
         assert_eq!(format_duration(Duration::from_secs(125)), "02:05");
@@ -1342,11 +1075,9 @@ mod tests {
     }
 
     #[test]
-    fn idle_app_has_no_eta() {
+    fn idle_app_has_no_progress() {
         let app = App::default();
-        assert!(app.eta().is_none());
         assert_eq!(app.stage_percent(), 0.0);
-        assert_eq!(app.overall_percent(), 0.0);
     }
 
     #[test]

@@ -18,24 +18,6 @@ fn main() {
 
     let dir = "locales";
     println!("cargo:rerun-if-changed={dir}");
-    let mut paths: Vec<_> = std::fs::read_dir(dir)
-        .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).collect())
-        .unwrap_or_default();
-    paths.sort();
-
-    // FNV-1a по содержимому файлов (детерминирован, без зависимостей).
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for path in &paths {
-        println!("cargo:rerun-if-changed={}", path.display());
-        for byte in std::fs::read(path).unwrap_or_default() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x0100_0000_01b3);
-        }
-        // Разделитель между файлами, чтобы перестановка не совпала.
-        hash ^= 0xff;
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
-    }
-    println!("cargo:rustc-env=DOC_LOCALES_FINGERPRINT={hash:016x}");
 }
 
 /// Иконка и данные версии в PE-ресурсах Windows (Проводник, Пуск, «Свойства файла»).

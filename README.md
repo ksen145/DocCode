@@ -38,7 +38,7 @@ dependencies and no network requests.
 | | Capability | What you get |
 | --- | --- | --- |
 | 🔍 | **Multi-language analysis** | Python, Rust, JavaScript, TypeScript, HTML and CSS parsed with tree-sitter |
-| 🧠 | **Vector code index** | Qdrant Edge embedded (no separate server) or an in-memory fallback |
+| 🧠 | **Vector code index** | Qdrant Edge embedded (no separate server) |
 | ✍️ | **LLM-written docs** | A component plan plus per-component Markdown grounded in retrieved context |
 | 🧩 | **Configurable reasoning** | Enable or disable model `think`; reasoning traces are stripped before Markdown becomes HTML |
 | ✅ | **D1 quality gate** | Factual accuracy and completeness scored by a model, with configurable thresholds and retries |
@@ -126,42 +126,6 @@ In the app:
    **Scan → Index → Plan → Generate → Finalize**.
 5. Open the produced `index.html`.
 
-<details>
-<summary><b>Lightweight build without Qdrant</b></summary>
-
-Uses the in-memory vector store — handy for smoke tests and debugging:
-
-```bash
-cargo run --no-default-features
-```
-
-</details>
-
-## Examples
-
-| Command | What it does |
-| --- | --- |
-| `cargo run --example ollama_smoke -- http://localhost:11434 gemma4:e4b` | Check connectivity to Ollama |
-| `cargo run --example analyze_project -- .` | Analyse a project without an LLM |
-| `cargo run --example render_site_demo -- ./demo-site` | Render a demo site without an LLM (layout and JS) |
-| `cargo run --example site_e2e -- <project> gemma4:e4b <docs>` | Full pipeline without the GUI |
-
-<details>
-<summary><b>Running without the D1 check</b></summary>
-
-```bash
-DOCCODE_D1=0 cargo run --example site_e2e -- <project>
-```
-
-On Windows:
-
-```powershell
-$env:DOCCODE_D1 = "0"
-cargo run --example site_e2e -- <project>
-```
-
-</details>
-
 ## Data locations
 
 | What | Where |
@@ -180,18 +144,17 @@ network requests go only to the configured Ollama address.
 cargo fmt --all --check
 cargo check --all-targets
 cargo test
-cargo test --no-default-features
 ```
 
 ## Project layout
 
 ```text
 src/
-├── ai/           # Ollama client, D1 contract, AiClient abstraction
+├── ai/           # Ollama client, D1 contract
 ├── app/          # GUI state and pipeline stages
 ├── core/         # scanner, tree-sitter parsers, project model
 ├── docs/         # chunks and retrieval, plan, generation, HTML render
-├── index/        # Qdrant Edge and in-memory vector stores
+├── index/        # Qdrant Edge vector store
 ├── prompts/      # YAML schema, templates, variable substitution
 ├── ui/           # iced screens, theme, i18n
 ├── config.rs     # application configuration

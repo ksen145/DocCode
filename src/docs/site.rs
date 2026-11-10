@@ -8,12 +8,13 @@
 //!    факты и полноту;
 //! 4. [`finalize_site`] — детерминированный рендер `index.html`.
 
-use crate::ai::client::{AiClient, GenerateOptions};
+use crate::ai::client::GenerateOptions;
 use crate::ai::d1::{D1Policy, D1Request};
-use crate::ai::make_client;
+use crate::ai::ollama::OllamaClient;
 use crate::config::{AiBackendConfig, D1Config, GenerationConfig};
 use crate::core::model::ProjectModel;
 use crate::core::parser::Entity;
+use crate::core::progress::ProgressCounters;
 use crate::core::scanner::language_for_path;
 use crate::docs::plan::{
     entry_candidates, fallback_plan, known_files, normalize_path, parse_plan, sanitize_plan,
@@ -143,6 +144,7 @@ pub struct ComponentDoc {
     /// Короткое описание из плана.
     pub description: String,
     /// Markdown, сгенерированный LLM.
+    #[serde(skip)]
     pub markdown: String,
     /// HTML для страницы.
     pub html: String,
@@ -212,7 +214,6 @@ pub struct SiteStats {
     pub needs_review: usize,
     pub unverified: usize,
     pub failed: usize,
-    pub index_backend: String,
 }
 
 /// Готовый документ сайта.
@@ -228,6 +229,7 @@ pub struct SiteDoc {
     /// Порог полноты, с которым проверялся этот документ.
     #[serde(default = "default_site_min_completeness")]
     pub d1_min_completeness: u8,
+    #[serde(skip)]
     pub overview_markdown: String,
     pub overview_html: String,
     pub overview_status: DocStatus,
@@ -264,21 +266,16 @@ pub struct ComponentResult {
 }
 
 /// Шаг 1: индексация кода в Qdrant.
-pub async fn build_index(config: &SiteConfig, model: &ProjectModel) -> Result<IndexStats, String> {
-    build_index_with_progress(config, model, None).await
-}
-
-/// Шаг 1 с отчётом о прогрессе индексации для UI.
-pub async fn build_index_with_progress(
+pub async fn build_index(
     config: &SiteConfig,
     model: &ProjectModel,
-    progress: Option<&crate::core::progress::ProgressCounters>,
+    progress: &ProgressCounters,
 ) -> Result<IndexStats, String> {
-    let client = make_client(&config.ai);
-    rag::build_index_with_progress(
+    let client = OllamaClient::from_config(&config.ai);
+    rag::build_index(
         model,
         &config.project_root,
-        client.as_ref(),
+        &client,
         &config.ai.embedding_model,
         progress,
     )
@@ -292,30 +289,21 @@ pub async fn plan_site(
     index: &IndexStats,
 ) -> Result<SiteDraft, String> {
     let prompts = load_prompts(&config.prompts_path)?;
-    let client = make_client(&config.ai);
+    let client = OllamaClient::from_config(&config.ai);
     let mut warnings = Vec::new();
-    let mut verification_notes = Vec::new();
 
     let query_strings: Vec<String> = PROJECT_QUERIES
         .iter()
         .map(|query| (*query).to_string())
         .collect();
-    let chunks = match rag::retrieve(
-        client.as_ref(),
-        &config.project_root,
-        &query_strings,
-        4,
-        42,
-        None,
-    )
-    .await
-    {
-        Ok(chunks) => chunks,
-        Err(e) => {
-            warnings.push(format!("Векторный контекст обзора не получен: {e}"));
-            Vec::new()
-        }
-    };
+    let chunks =
+        match rag::retrieve(&client, &config.project_root, &query_strings, 4, 42, None).await {
+            Ok(chunks) => chunks,
+            Err(e) => {
+                warnings.push(format!("Векторный контекст обзора не получен: {e}"));
+                Vec::new()
+            }
+        };
     let context = rag::format_context(&chunks, OVERVIEW_CONTEXT_CHARS);
     let outline = project_outline(model);
 
@@ -378,7 +366,6 @@ pub async fn plan_site(
         needs_review: 0,
         unverified: 0,
         failed: 0,
-        index_backend: index.backend.clone(),
     };
 
     // Обзор проекта: отдельный запрос, чтобы не перегружать JSON-план.
@@ -409,13 +396,12 @@ pub async fn plan_site(
         Ok(prompt) => {
             generate_verified(
                 config,
-                client.as_ref(),
+                &client,
                 &prompts,
                 &prompt,
                 &context,
                 "обзор проекта",
                 &mut warnings,
-                &mut verification_notes,
             )
             .await
         }
@@ -459,7 +445,7 @@ pub async fn describe_component(
     all_files: &HashSet<String>,
 ) -> Result<ComponentResult, String> {
     let prompts = load_prompts(&config.prompts_path)?;
-    let client = make_client(&config.ai);
+    let client = OllamaClient::from_config(&config.ai);
 
     let files: Vec<String> = component
         .all_files()
@@ -494,7 +480,7 @@ pub async fn describe_component(
 
     let allowed: HashSet<String> = files.iter().cloned().collect();
     let chunks = rag::retrieve(
-        client.as_ref(),
+        &client,
         &config.project_root,
         &queries,
         3,
@@ -517,16 +503,14 @@ pub async fn describe_component(
     )?;
 
     let mut warnings = Vec::new();
-    let mut _notes = Vec::new();
     let (markdown, status, verification) = generate_verified(
         config,
-        client.as_ref(),
+        &client,
         &prompts,
         &prompt,
         &context,
         &format!("компонент «{}»", component.name),
         &mut warnings,
-        &mut _notes,
     )
     .await;
 
@@ -546,46 +530,49 @@ pub async fn describe_component(
     })
 }
 
-/// Применение результата к дереву.
-pub fn apply_component_result(draft: &mut SiteDraft, result: ComponentResult) {
-    fn update(components: &mut [ComponentDoc], result: &ComponentResult) -> bool {
+/// Обход дерева компонентов с возможностью изменить найденный узел.
+///
+/// Возвращает `true`, если `f` остановил обход (вернул `true`).
+fn walk_mut(components: &mut [ComponentDoc], id: &str, f: &mut impl FnMut(&mut ComponentDoc)) {
+    fn visit(
+        components: &mut [ComponentDoc],
+        id: &str,
+        f: &mut impl FnMut(&mut ComponentDoc),
+    ) -> bool {
         for component in components {
-            if component.id == result.id {
-                component.markdown = result.markdown.clone();
-                component.html = result.html.clone();
-                component.status = result.status;
-                component.verification = result.verification.clone();
+            if component.id == id {
+                f(component);
                 return true;
             }
-            if update(&mut component.children, result) {
+            if visit(&mut component.children, id, &mut *f) {
                 return true;
             }
         }
         false
     }
-    update(&mut draft.doc.components, &result);
+    visit(components, id, f);
+}
+
+/// Применение результата к дереву.
+pub fn apply_component_result(draft: &mut SiteDraft, result: ComponentResult) {
+    walk_mut(&mut draft.doc.components, &result.id, &mut |component| {
+        component.markdown = result.markdown.clone();
+        component.html = result.html.clone();
+        component.status = result.status;
+        component.verification = result.verification.clone();
+    });
 }
 
 /// Пометить компонент ошибкой, не прерывая остальные.
 pub fn mark_component_failed(draft: &mut SiteDraft, component_id: &str, error: &str) {
-    fn update(components: &mut [ComponentDoc], id: &str, error: &str) -> bool {
-        for component in components {
-            if component.id == id {
-                component.status = DocStatus::Failed;
-                component.markdown = format!(
-                    "# {}\n\n_Не удалось сгенерировать описание._\n\n```text\n{}\n```",
-                    component.name, error
-                );
-                component.html = site_html::markdown_to_html(&component.markdown);
-                return true;
-            }
-            if update(&mut component.children, id, error) {
-                return true;
-            }
-        }
-        false
-    }
-    update(&mut draft.doc.components, component_id, error);
+    walk_mut(&mut draft.doc.components, component_id, &mut |component| {
+        component.status = DocStatus::Failed;
+        component.markdown = format!(
+            "# {}\n\n_Не удалось сгенерировать описание._\n\n```text\n{}\n```",
+            component.name, error
+        );
+        component.html = site_html::markdown_to_html(&component.markdown);
+    });
 }
 
 /// Шаг 4: финальный HTML.
@@ -604,15 +591,13 @@ pub fn finalize_site(config: &SiteConfig, draft: &mut SiteDraft) -> Result<PathB
 
 /// Публичная обёртка: найти компонент по id.
 pub fn find_component<'a>(components: &'a [ComponentDoc], id: &str) -> Option<&'a ComponentDoc> {
-    for component in components {
+    components.iter().find_map(|component| {
         if component.id == id {
-            return Some(component);
+            Some(component)
+        } else {
+            find_component(&component.children, id)
         }
-        if let Some(found) = find_component(&component.children, id) {
-            return Some(found);
-        }
-    }
-    None
+    })
 }
 
 fn refresh_component_stats(doc: &mut SiteDoc) {
@@ -682,25 +667,24 @@ fn render_prompt(
     Ok(substitute(&prompt.template, vars))
 }
 
-fn prompt_text<'a>(prompts: &'a PromptsConfig, name: &str, fallback: &'a str) -> &'a str {
+fn prompt_text<'a>(prompts: &'a PromptsConfig, name: &str) -> &'a str {
     prompts
         .prompts
         .get(name)
         .map(|prompt: &Prompt| prompt.template.as_str())
-        .unwrap_or(fallback)
+        .unwrap_or_default()
 }
 
 /// Генерация + проверка D1 + один повтор при отказе.
 #[allow(clippy::too_many_arguments)]
 async fn generate_verified(
     config: &SiteConfig,
-    client: &dyn AiClient,
+    client: &OllamaClient,
     prompts: &PromptsConfig,
     prompt: &str,
     source_context: &str,
     label: &str,
     warnings: &mut Vec<String>,
-    notes: &mut Vec<String>,
 ) -> (String, DocStatus, Option<Verification>) {
     let options = generation_options(config);
     let max_retries = config.d1.max_retries as usize;
@@ -725,7 +709,6 @@ async fn generate_verified(
         last_markdown = markdown.clone();
 
         if !config.verify_d1 {
-            notes.push(format!("{label}: D1-проверка отключена"));
             return (markdown, DocStatus::Unverified, None);
         }
 
@@ -770,22 +753,14 @@ async fn generate_verified(
 
 /// Проверка документа моделью D1.
 async fn verify_document(
-    client: &dyn AiClient,
+    client: &OllamaClient,
     prompts: &PromptsConfig,
     markdown: &str,
     source_context: &str,
     policy: D1Policy,
 ) -> (DocStatus, Option<Verification>) {
-    let factuality = prompt_text(
-        prompts,
-        "d1_factuality",
-        "Все технические утверждения документации должны подтверждаться исходным кодом.",
-    );
-    let completeness = prompt_text(
-        prompts,
-        "d1_completeness",
-        "Оцени, достаточно ли документации разработчику для начала работы с компонентом.",
-    );
+    let factuality = prompt_text(prompts, "d1_factuality");
+    let completeness = prompt_text(prompts, "d1_completeness");
     let criteria: Vec<String> = COMPLETENESS_CRITERIA
         .iter()
         .map(|value| (*value).to_string())

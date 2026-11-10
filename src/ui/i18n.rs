@@ -47,190 +47,14 @@ impl Lang {
     }
 }
 
-/// Все ключи словаря (для тестов полноты).
-pub const KEYS: &[&str] = &[
-    "app.title",
-    "app.tagline",
-    "nav.welcome",
-    "nav.project",
-    "nav.ai",
-    "nav.prompts",
-    "nav.progress",
-    "nav.results",
-    "nav.generate",
-    "nav.back",
-    "nav.section.setup",
-    "nav.section.run",
-    "topbar.workspace",
-    "sidebar.no_project",
-    "sidebar.status.ready",
-    "sidebar.status.working",
-    "sidebar.status.done",
-    "common.save",
-    "common.saved",
-    "common.enabled",
-    "common.disabled",
-    "common.theme_light",
-    "common.theme_dark",
-    "common.theme_system",
-    "welcome.title",
-    "welcome.subtitle",
-    "welcome.hint",
-    "welcome.eyebrow",
-    "welcome.start",
-    "welcome.configure",
-    "welcome.recommended",
-    "welcome.recommended_generation",
-    "welcome.recommended_quality",
-    "welcome.project",
-    "welcome.model",
-    "welcome.ai",
-    "welcome.quality",
-    "welcome.not_set",
-    "welcome.how",
-    "welcome.step1.title",
-    "welcome.step1.body",
-    "welcome.step2.title",
-    "welcome.step2.body",
-    "welcome.step3.title",
-    "welcome.step3.body",
-    "project.title",
-    "project.hint",
-    "project.path",
-    "project.path_hint",
-    "project.docs",
-    "project.docs_hint",
-    "project.browse",
-    "project.choose_path",
-    "project.choose_docs",
-    "project.paths_card",
-    "project.quality_card",
-    "project.saved",
-    "project.save_error",
-    "project.d1_verification",
-    "project.d1_verification_hint",
-    "project.open_ai",
-    "project.edit_d1",
-    "project.factuality_short",
-    "project.completeness_short",
-    "project.retries_short",
-    "ai.title",
-    "ai.hint",
-    "ai.recommended_badge",
-    "ai.recommended_models",
-    "ai.recommended_hint",
-    "ai.connection_card",
-    "ai.url",
-    "ai.url_hint",
-    "ai.models_card",
-    "ai.model",
-    "ai.model_hint",
-    "ai.embedding_model",
-    "ai.embedding_model_hint",
-    "ai.generation_card",
-    "ai.generation_hint",
-    "ai.temperature",
-    "ai.temperature_hint",
-    "ai.max_tokens",
-    "ai.max_tokens_hint",
-    "ai.thinking",
-    "ai.thinking_hint",
-    "ai.d1_card",
-    "ai.d1_model",
-    "ai.d1_model_hint",
-    "ai.d1_min_factuality",
-    "ai.d1_min_factuality_hint",
-    "ai.d1_min_completeness",
-    "ai.d1_min_completeness_hint",
-    "ai.d1_max_retries",
-    "ai.d1_max_retries_hint",
-    "ai.invalid_temperature",
-    "ai.temperature_range",
-    "ai.invalid_max_tokens",
-    "ai.max_tokens_range",
-    "ai.invalid_factuality",
-    "ai.factuality_range",
-    "ai.invalid_completeness",
-    "ai.completeness_range",
-    "ai.invalid_retries",
-    "ai.retries_range",
-    "ai.saved",
-    "ai.save_error",
-    "ai.test",
-    "ai.testing",
-    "ai.ok",
-    "ai.fail",
-    "prompts.title",
-    "prompts.path",
-    "prompts.hint",
-    "prompts.missing",
-    "prompts.validate",
-    "prompts.valid",
-    "prompts.invalid",
-    "prompts.saved",
-    "prompts.save_error",
-    "prompts.reset",
-    "prompts.parameters_title",
-    "prompts.parameters_hint",
-    "prompts.open_ai",
-    "progress.title",
-    "progress.subtitle",
-    "progress.current",
-    "progress.overall",
-    "progress.elapsed",
-    "progress.remaining",
-    "progress.estimating",
-    "progress.collecting",
-    "progress.preparing_index",
-    "progress.waiting_model",
-    "progress.writing",
-    "progress.files",
-    "progress.chunks",
-    "progress.components",
-    "progress.stage.scan",
-    "progress.stage.parse",
-    "progress.stage.index",
-    "progress.stage.plan",
-    "progress.stage.generate",
-    "progress.stage.finalize",
-    "progress.stage.done",
-    "progress.working",
-    "progress.hint",
-    "results.title",
-    "results.subtitle",
-    "results.again",
-    "results.written",
-    "results.failures",
-    "results.scanned",
-    "results.indexed",
-    "results.components",
-    "results.verified",
-    "results.needs_review",
-    "results.unverified",
-    "results.open",
-    "results.opened",
-    "results.open_error",
-    "results.files",
-    "results.errors",
-    "results.empty",
-    "results.empty_title",
-    "results.success_title",
-    "results.success_body",
-    "results.error_title",
-    "results.error_body",
-    "results.d1_card",
-    "results.back",
-    "error.project_empty",
-    "error.project_missing",
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_yaml::Value;
+    use std::collections::BTreeMap;
 
-    /// Рекурсивно сворачивает YAML-словарь в плоский список dotted-ключей.
-    fn flatten(value: &Value, prefix: &str, out: &mut Vec<String>) {
+    /// Рекурсивно сворачивает YAML-словарь в плоскую карту dotted-ключей.
+    fn flatten(value: &Value, prefix: &str, out: &mut BTreeMap<String, String>) {
         match value {
             Value::Mapping(map) => {
                 for (k, v) in map {
@@ -245,68 +69,48 @@ mod tests {
             }
             Value::String(text) => {
                 assert!(!text.is_empty(), "пустое значение перевода для {prefix}");
-                out.push(prefix.to_string());
+                out.insert(prefix.to_string(), text.clone());
             }
             other => panic!("неожиданное значение для {prefix}: {other:?}"),
         }
     }
 
-    #[test]
-    fn all_keys_have_translations_in_both_locales() {
-        for key in KEYS {
-            for lang in [Lang::Ru, Lang::En] {
-                let value = lang.t(key);
-                assert!(
-                    !value.is_empty(),
-                    "пустой перевод {} для {key}",
-                    lang.code()
-                );
-                assert_ne!(
-                    value.as_ref(),
-                    *key,
-                    "нет перевода {} для {key} (возвращён сам ключ)",
-                    lang.code()
-                );
-            }
-        }
+    fn locale(file: &str) -> BTreeMap<String, String> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("не удалось прочитать {}: {e}", path.display()));
+        let yaml: Value = serde_yaml::from_str(&text)
+            .unwrap_or_else(|e| panic!("{file}: некорректный YAML: {e}"));
+        let mut keys = BTreeMap::new();
+        flatten(&yaml, "", &mut keys);
+        keys
     }
 
-    /// Строгая проверка файлов переводов: каждый ключ KEYS есть именно в ru.yml
-    /// и именно в en.yml (fallback на en маскировал бы пропуск в ru.yml).
     #[test]
-    fn yaml_locale_files_contain_all_keys() {
-        for file in ["locales/ru.yml", "locales/en.yml"] {
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file);
-            let text = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("не удалось прочитать {}: {e}", path.display()));
-            let yaml: Value = serde_yaml::from_str(&text)
-                .unwrap_or_else(|e| panic!("{file}: некорректный YAML: {e}"));
-            let mut keys = Vec::new();
-            flatten(&yaml, "", &mut keys);
-            for key in KEYS {
-                assert!(
-                    keys.iter().any(|k| k.as_str() == *key),
-                    "в {file} нет ключа {key}"
-                );
-            }
-        }
+    fn locale_files_have_matching_keys_and_real_translations() {
+        let ru = locale("locales/ru.yml");
+        let en = locale("locales/en.yml");
+        assert_eq!(
+            ru.keys().collect::<Vec<_>>(),
+            en.keys().collect::<Vec<_>>(),
+            "наборы ключей ru.yml и en.yml разошлись"
+        );
+        let differing = ru
+            .iter()
+            .filter(|(key, value)| {
+                en.get(*key)
+                    .is_some_and(|translation| translation != *value)
+            })
+            .count();
+        assert!(
+            differing >= ru.len() / 2,
+            "подозрительно мало различий: {differing}"
+        );
     }
 
     #[test]
     fn backend_registers_en_and_ru() {
         assert_eq!(crate::_rust_i18n_available_locales(), vec!["en", "ru"]);
-    }
-
-    #[test]
-    fn at_least_some_keys_differ_between_languages() {
-        let differing = KEYS
-            .iter()
-            .filter(|k| Lang::Ru.t(k) != Lang::En.t(k))
-            .count();
-        assert!(
-            differing >= KEYS.len() / 2,
-            "подозрительно мало различий: {differing}"
-        );
     }
 
     #[test]

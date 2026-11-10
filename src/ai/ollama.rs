@@ -1,8 +1,8 @@
 //! Клиент для Ollama API (http://localhost:11434).
 
-use crate::ai::client::{strip_reasoning, AiClient, GenerateOptions, GenerationResult, Usage};
+use crate::ai::client::{strip_reasoning, GenerateOptions, GenerationResult};
 use crate::ai::d1::{D1Request, D1Response};
-use async_trait::async_trait;
+use crate::config::AiBackendConfig;
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -45,9 +45,15 @@ impl OllamaClient {
         }
     }
 
-    /// Конструктор для локального Ollama с моделью по умолчанию.
-    pub fn local() -> Self {
-        Self::new("http://localhost:11434", "qwen3.5:4b")
+    /// Конструктор из конфигурации приложения.
+    pub fn from_config(config: &AiBackendConfig) -> Self {
+        let url = config
+            .base_url
+            .clone()
+            .unwrap_or_else(|| "http://localhost:11434".to_string());
+        Self::new(url, config.model.clone())
+            .with_embed_model(config.embedding_model.clone())
+            .with_d1_model(config.d1_model.clone())
     }
 
     /// Указать модель для эмбеддингов.
@@ -125,10 +131,6 @@ impl OllamaClient {
 struct GenerateResponse {
     #[serde(default)]
     response: String,
-    #[serde(default)]
-    prompt_eval_count: u32,
-    #[serde(default)]
-    eval_count: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -137,9 +139,8 @@ struct EmbeddingsResponse {
     embedding: Vec<f32>,
 }
 
-#[async_trait]
-impl AiClient for OllamaClient {
-    async fn generate(
+impl OllamaClient {
+    pub async fn generate(
         &self,
         prompt: &str,
         options: &GenerateOptions,
@@ -152,14 +153,10 @@ impl AiClient for OllamaClient {
 
         Ok(GenerationResult {
             content: strip_reasoning(&parsed.response),
-            usage: Some(Usage {
-                prompt_tokens: parsed.prompt_eval_count,
-                completion_tokens: parsed.eval_count,
-            }),
         })
     }
 
-    async fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
+    pub async fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
         let body = serde_json::json!({
             "model": self.embed_model,
             "prompt": text,
@@ -175,7 +172,7 @@ impl AiClient for OllamaClient {
         Ok(parsed.embedding)
     }
 
-    async fn verify(&self, request: &D1Request) -> Result<D1Response, String> {
+    pub async fn verify(&self, request: &D1Request) -> Result<D1Response, String> {
         // D1 живёт на отдельном эндпоинте Ollama; модель можно переопределить
         // в конфигурации, но по умолчанию используется `d1`.
         let mut body = request.clone();
@@ -192,7 +189,7 @@ impl AiClient for OllamaClient {
         serde_json::from_value(value).map_err(|e| format!("Схема ответа D1: {}", e))
     }
 
-    async fn ping(&self) -> Result<(), String> {
+    pub async fn ping(&self) -> Result<(), String> {
         let response = self
             .http
             .get(format!("{}/api/tags", self.url))
@@ -214,7 +211,11 @@ mod tests {
     #[test]
     fn generate_body_maps_defaults_to_ollama_options() {
         let client = OllamaClient::new("http://localhost:11434", "test-model");
-        let mut options = GenerateOptions::new(0.2, 800);
+        let mut options = GenerateOptions {
+            temperature: Some(0.2),
+            max_tokens: Some(800),
+            think: None,
+        };
         options.think = Some(true);
         let body = client.generate_body("привет", &options);
 
@@ -234,7 +235,7 @@ mod tests {
 
     #[test]
     fn generate_body_keeps_backend_defaults_when_options_absent() {
-        let client = OllamaClient::local();
+        let client = OllamaClient::new("http://localhost:11434", "qwen3.5:4b");
         let body = client.generate_body("prompt", &GenerateOptions::default());
 
         let opts = body["options"].as_object().expect("options — объект");
@@ -250,7 +251,7 @@ mod tests {
 
     #[test]
     fn generate_body_forwards_think_setting() {
-        let client = OllamaClient::local();
+        let client = OllamaClient::new("http://localhost:11434", "qwen3.5:4b");
         for think in [false, true] {
             let options = GenerateOptions {
                 think: Some(think),

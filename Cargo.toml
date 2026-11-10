@@ -44,16 +44,14 @@ blake3 = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Async traits for AiClient (object safety)
-async-trait = "0.1"
-
 # i18n: переводы UI из locales/*.yml, вшиваются в бинарь на этапе компиляции
 rust-i18n = "3"
 
-# Vector database (Qdrant Edge, встраиваемый режим) — под фичей `qdrant`.
-# Включена по умолчанию; для лёгкой сборки без Qdrant:
-# `cargo run --no-default-features` (тогда используется in-memory стор).
-qdrant-edge = { version = "0.8", optional = true }
+# Markdown → HTML для сгенерированного сайта
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
+
+# Vector database (Qdrant Edge, встраиваемый режим)
+qdrant-edge = "0.8"
 
 # Directory handling
 dirs = "5"
@@ -63,12 +61,6 @@ dark-light = "1"
 
 # Native folder picker for project and documentation paths
 rfd = "0.17"
-
-[features]
-# Qdrant Edge — основной векторный индекс документации. Отключить можно так:
-# `cargo run --no-default-features` (тогда используется in-memory стор).
-default = ["qdrant"]
-qdrant = ["dep:qdrant-edge"]
 
 # Сборка: иконка .ico + данные версии в PE-ресурсах exe (см. build.rs).
 # Крейт кроссплатформенный: на не-Windows хостах использует windres из binutils.

@@ -38,7 +38,7 @@
 | | Возможность | Что получаете |
 | --- | --- | --- |
 | 🔍 | **Анализ нескольких языков** | Python, Rust, JavaScript, TypeScript, HTML и CSS через tree-sitter |
-| 🧠 | **Векторный индекс кода** | Встроенный Qdrant Edge (без отдельного сервера) или in-memory fallback |
+| 🧠 | **Векторный индекс кода** | Встроенный Qdrant Edge (без отдельного сервера) |
 | ✍️ | **Документация от LLM** | План компонентов и Markdown по каждому компоненту на основе векторного контекста |
 | ✅ | **Контроль качества D1** | Фактическая точность и полнота от модели, настраиваемые пороги и повторы |
 | 📦 | **Один файл на выходе** | `index.html` с обзором, точками входа, деревом компонентов, поиском, хлебными крошками и hash-маршрутами |
@@ -124,42 +124,6 @@ Release-сборка для Windows запускается без консоль
    **Сканирование → Индексация → План → Генерация → Финализация**.
 5. Откройте созданный `index.html`.
 
-<details>
-<summary><b>Лёгкая сборка без Qdrant</b></summary>
-
-Используется in-memory векторное хранилище — удобно для проверки и отладки:
-
-```bash
-cargo run --no-default-features
-```
-
-</details>
-
-## Примеры
-
-| Команда | Что делает |
-| --- | --- |
-| `cargo run --example ollama_smoke -- http://localhost:11434 gemma4:e4b` | Проверка связи с Ollama |
-| `cargo run --example analyze_project -- .` | Анализ проекта без LLM |
-| `cargo run --example render_site_demo -- ./demo-site` | Демонстрационный сайт без LLM (вёрстка и JS) |
-| `cargo run --example site_e2e -- <проект> gemma4:e4b <docs>` | Полный прогон пайплайна без GUI |
-
-<details>
-<summary><b>Запуск без проверки D1</b></summary>
-
-```bash
-DOCCODE_D1=0 cargo run --example site_e2e -- <проект>
-```
-
-На Windows:
-
-```powershell
-$env:DOCCODE_D1 = "0"
-cargo run --example site_e2e -- <проект>
-```
-
-</details>
-
 ## Где хранятся данные
 
 | Что | Где |
@@ -178,18 +142,17 @@ cargo run --example site_e2e -- <проект>
 cargo fmt --all --check
 cargo check --all-targets
 cargo test
-cargo test --no-default-features
 ```
 
 ## Структура проекта
 
 ```text
 src/
-├── ai/           # Ollama-клиент, контракт D1, абстракция AiClient
+├── ai/           # Ollama-клиент, контракт D1
 ├── app/          # состояние GUI и стадии пайплайна
 ├── core/         # сканер, tree-sitter парсеры, модель проекта
 ├── docs/         # чанки и retrieval, план, генерация, HTML-рендер
-├── index/        # Qdrant Edge и in-memory векторное хранилище
+├── index/        # векторное хранилище Qdrant Edge
 ├── prompts/      # YAML-схема, шаблоны и подстановка переменных
 ├── ui/           # экраны iced, тема, i18n
 ├── config.rs     # конфигурация приложения

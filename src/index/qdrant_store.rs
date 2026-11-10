@@ -1,8 +1,5 @@
 //! Qdrant Edge — локальный векторный магазин на диске (embedded, без сервера).
 //!
-//! Включается фичей `qdrant` (`cargo run --features qdrant`). Без фичи проект
-//! собирается с in-memory `VectorStore` из [`crate::index::vector_store`].
-//!
 //! Особенности API qdrant-edge 0.8:
 //! - Всё публичное экспортируется из корня крейта (`qdrant_edge::*`).
 //! - [`EdgeShard::load`] создаёт новый шард, если каталог пуст.
@@ -16,7 +13,7 @@
 //! Id точек в Qdrant — только u64/UUID, поэтому строковый id чанка хэшируется
 //! (blake3 → u64), а исходный id и payload хранятся в payload точки.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use qdrant_edge::{
     Distance, EdgeConfig, EdgeShard, EdgeVectorParamsBuilder, NamedQuery, PointInsertOperations,
@@ -35,11 +32,7 @@ const PAYLOAD_ID: &str = "id";
 const PAYLOAD_TEXT: &str = "payload";
 
 /// Векторное хранилище на Qdrant Edge: один шард на диске.
-///
-/// API намеренно зеркалит [`crate::index::vector_store::VectorStore`]
-/// (`add`/`search`/`len`), чтобы стора можно было выбирать взаимозаменяемо.
 pub struct QdrantVectorStore {
-    path: PathBuf,
     shard: EdgeShard,
     dimension: usize,
 }
@@ -62,29 +55,7 @@ impl QdrantVectorStore {
         let shard = EdgeShard::load(&path, Some(config))
             .map_err(|e| format!("Qdrant шард не открыт ({}): {e}", path.display()))?;
 
-        Ok(Self {
-            path,
-            shard,
-            dimension,
-        })
-    }
-
-    /// Путь каталога шарда (для логов).
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    /// Ожидаемая размерность векторов.
-    pub fn dimension(&self) -> usize {
-        self.dimension
-    }
-
-    /// Добавление/замена точки. При несовпадении размерности — ошибка.
-    ///
-    /// Как и в in-memory сторе, точка с существующим id заменяется (id
-    /// детерминированно хэшируется в u64, поэтому замена работает).
-    pub fn add(&mut self, point: VectorPoint) -> Result<(), String> {
-        self.add_batch(vec![point])
+        Ok(Self { shard, dimension })
     }
 
     /// Добавление пачки точек одним upsert + один flush.
@@ -141,10 +112,6 @@ impl QdrantVectorStore {
         self.shard
             .count(CountRequest::default())
             .map_err(|e| format!("Qdrant count не выполнен: {e}"))
-    }
-
-    pub fn is_empty(&self) -> Result<bool, String> {
-        Ok(self.len()? == 0)
     }
 
     /// Поиск top_k ближайших точек.
@@ -214,6 +181,7 @@ impl QdrantVectorStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn tmp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("doccode_qdrant_{name}"));
@@ -226,18 +194,18 @@ mod tests {
         let dir = tmp_dir("roundtrip");
         let mut store = QdrantVectorStore::open(&dir, 4).unwrap();
         store
-            .add(VectorPoint {
-                id: "a".into(),
-                vector: vec![1.0, 0.0, 0.0, 0.0],
-                payload: "a-entity".into(),
-            })
-            .unwrap();
-        store
-            .add(VectorPoint {
-                id: "b".into(),
-                vector: vec![0.0, 1.0, 0.0, 0.0],
-                payload: "b-entity".into(),
-            })
+            .add_batch(vec![
+                VectorPoint {
+                    id: "a".into(),
+                    vector: vec![1.0, 0.0, 0.0, 0.0],
+                    payload: "a-entity".into(),
+                },
+                VectorPoint {
+                    id: "b".into(),
+                    vector: vec![0.0, 1.0, 0.0, 0.0],
+                    payload: "b-entity".into(),
+                },
+            ])
             .unwrap();
 
         let hits = store.search(&[1.0, 0.0, 0.0, 0.0], 2).unwrap();
@@ -258,11 +226,11 @@ mod tests {
     fn rejects_wrong_dim() {
         let dir = tmp_dir("dim");
         let mut store = QdrantVectorStore::open(&dir, 3).unwrap();
-        let bad = store.add(VectorPoint {
+        let bad = store.add_batch(vec![VectorPoint {
             id: "x".into(),
             vector: vec![1.0, 0.0],
             payload: String::new(),
-        });
+        }]);
         assert!(bad.is_err());
         let bad_search = store.search(&[1.0, 0.0], 1);
         assert!(bad_search.is_err());
@@ -283,11 +251,11 @@ mod tests {
         {
             let mut store = QdrantVectorStore::open(&dir, 2).unwrap();
             store
-                .add(VectorPoint {
+                .add_batch(vec![VectorPoint {
                     id: "p".into(),
                     vector: vec![0.6, 0.8],
                     payload: "payload".into(),
-                })
+                }])
                 .unwrap();
         }
         let store = QdrantVectorStore::open(&dir, 2).unwrap();

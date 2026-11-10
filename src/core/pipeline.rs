@@ -9,9 +9,9 @@
 //! затем чанкуется и индексируется в Qdrant.
 
 use crate::core::model::ProjectModel;
-use crate::core::parser::{get_parser_for_path, Entity};
+use crate::core::parser::{parse, Entity};
 use crate::core::progress::ProgressCounters;
-use crate::core::scanner::scan_directory;
+use crate::core::scanner::{language_for_path, scan_directory};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Component, Path, PathBuf};
 
@@ -41,54 +41,38 @@ pub fn relative_slash_path(root: &Path, path: &Path) -> String {
 ///
 /// Файлы, которые не удалось прочитать, пропускаются с предупреждением
 /// в лог (graceful degradation), а не прерывают весь анализ.
-pub fn analyze_project_sync(root: &Path) -> Result<Analysis, String> {
-    analyze_project_sync_with_progress(root, None)
-}
-
-/// То же, что [`analyze_project_sync`], но с отчётом о прогрессе для UI.
-///
-/// `progress` получает счётчики сканирования: сначала общее число файлов,
-/// затем по одному разобранному файлу.
-pub fn analyze_project_sync_with_progress(
-    root: &Path,
-    progress: Option<&ProgressCounters>,
-) -> Result<Analysis, String> {
+/// `progress` получает счётчики сканирования.
+pub fn analyze_project_sync(root: &Path, progress: &ProgressCounters) -> Result<Analysis, String> {
     if !root.is_dir() {
         return Err(format!("Директория не найдена: {}", root.display()));
     }
 
     let files = scan_directory(root);
     let files_scanned = files.len();
-    if let Some(progress) = progress {
-        progress.set_scan_total(files_scanned);
-    }
+    progress.set_scan_total(files_scanned);
 
     let mut entities: HashMap<String, Vec<Entity>> = HashMap::new();
     let mut project_files = BTreeSet::new();
 
     for file in &files {
-        let relative = relative_slash_path(root, &file.path);
+        let relative = relative_slash_path(root, file);
         if relative.is_empty() {
-            if let Some(progress) = progress {
-                progress.advance_scan();
-            }
+            progress.advance_scan();
             continue;
         }
         project_files.insert(relative.clone());
 
-        let content = match std::fs::read_to_string(&file.path) {
+        let content = match std::fs::read_to_string(file) {
             Ok(content) => content,
             Err(e) => {
-                tracing::warn!("Не удалось прочитать {}: {}", file.path.display(), e);
-                if let Some(progress) = progress {
-                    progress.advance_scan();
-                }
+                tracing::warn!("Не удалось прочитать {}: {}", file.display(), e);
+                progress.advance_scan();
                 continue;
             }
         };
 
-        if let Some(parser) = get_parser_for_path(&file.path) {
-            let mut parsed = parser.parse(&content, Path::new(&relative));
+        if let Some(language) = language_for_path(file) {
+            let mut parsed = parse(language, &content, Path::new(&relative));
             for entity in &mut parsed {
                 entity.file_path = PathBuf::from(&relative);
             }
@@ -97,9 +81,7 @@ pub fn analyze_project_sync_with_progress(
             }
         }
 
-        if let Some(progress) = progress {
-            progress.advance_scan();
-        }
+        progress.advance_scan();
     }
 
     let name = root
@@ -119,25 +101,22 @@ pub fn analyze_project_sync_with_progress(
     })
 }
 
-/// Асинхронная обёртка для запуска из UI-цикла (`Task::perform`).
-pub async fn analyze_project(root: PathBuf) -> Result<Analysis, String> {
-    analyze_project_sync(&root)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn missing_directory_is_an_error() {
-        let err = analyze_project_sync(Path::new("no_such_dir_xyz")).unwrap_err();
+        let err = analyze_project_sync(Path::new("no_such_dir_xyz"), &ProgressCounters::new())
+            .unwrap_err();
         assert!(err.contains("не найдена"));
     }
 
     #[test]
     fn analyzes_own_source_directory_with_relative_paths() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let analysis = analyze_project_sync(&root).expect("анализ собственного проекта");
+        let analysis = analyze_project_sync(&root, &ProgressCounters::new())
+            .expect("анализ собственного проекта");
 
         assert!(analysis.files_scanned > 0, "файлы должны найтись");
         assert!(
@@ -177,7 +156,8 @@ mod tests {
         std::fs::write(dir.join("broken.rs"), [0xC3u8, 0x28, 0xFF]).unwrap();
         std::fs::write(dir.join("good.py"), "def ok():\n    return 1\n").unwrap();
 
-        let analysis = analyze_project_sync(&dir).expect("битые файлы не роняют анализ");
+        let analysis = analyze_project_sync(&dir, &ProgressCounters::new())
+            .expect("битые файлы не роняют анализ");
         assert_eq!(analysis.files_scanned, 2, "оба файла просканированы");
         assert!(
             analysis

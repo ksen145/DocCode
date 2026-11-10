@@ -30,17 +30,6 @@ const SKIP_DIRS: &[&str] = &[
     ".vscode",
 ];
 
-/// Результат сканирования одного файла.
-#[derive(Debug, Clone)]
-pub struct FileScanResult {
-    /// Путь к файлу.
-    pub path: PathBuf,
-    /// Язык (по расширению), None если не поддерживается.
-    pub language: Option<&'static str>,
-    /// Размер файла в байтах.
-    pub size: u64,
-}
-
 /// Определяем, пропускать ли директорию.
 fn should_skip(entry: &DirEntry) -> bool {
     if entry.depth() == 0 {
@@ -71,7 +60,7 @@ pub fn language_for_path(path: &Path) -> Option<&'static str> {
 }
 
 /// Рекурсивный обход проекта с фильтрацией по расширению.
-pub fn scan_directory(root: impl AsRef<Path>) -> Vec<FileScanResult> {
+pub fn scan_directory(root: impl AsRef<Path>) -> Vec<PathBuf> {
     let root = root.as_ref();
     let mut results = Vec::new();
 
@@ -84,12 +73,8 @@ pub fn scan_directory(root: impl AsRef<Path>) -> Vec<FileScanResult> {
         if !entry.file_type().is_file() || is_generated_site(&entry) {
             continue;
         }
-        if let Some(language) = language_for_path(entry.path()) {
-            results.push(FileScanResult {
-                path: entry.path().to_path_buf(),
-                language: Some(language),
-                size: entry.metadata().map(|m| m.len()).unwrap_or(0),
-            });
+        if language_for_path(entry.path()).is_some() {
+            results.push(entry.path().to_path_buf());
         }
     }
 
@@ -125,7 +110,7 @@ mod tests {
         let files = scan_directory(&dir);
         let names: Vec<String> = files
             .iter()
-            .map(|file| file.path.file_name().unwrap().to_string_lossy().to_string())
+            .map(|file| file.file_name().unwrap().to_string_lossy().to_string())
             .collect();
         assert!(!names.contains(&"index.html".to_string()));
         assert!(names.contains(&"page.html".to_string()));

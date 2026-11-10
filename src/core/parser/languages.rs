@@ -1,107 +1,84 @@
-//! Реализации парсеров для языков через tree-sitter.
+//! Извлечение сущностей из кода через tree-sitter.
 
-use super::{Entity, LanguageParser};
+use super::Entity;
 use std::path::Path;
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Parser, Query, QueryCursor};
 
-/// Парсер поверх tree-sitter: грамматика + query выборки сущностей.
-pub struct TsParser {
-    language: tree_sitter::Language,
-    query_src: &'static str,
-}
-
-impl TsParser {
-    pub fn new(language: tree_sitter::Language, query_src: &'static str) -> Self {
-        Self {
-            language,
-            query_src,
-        }
-    }
-
-    /// Извлечение сущностей по query: capture `@name` + capture-kind.
-    fn extract(&self, content: &str, file_path: &Path) -> Vec<Entity> {
-        let mut parser = Parser::new();
-        if let Err(e) = parser.set_language(&self.language) {
-            tracing::error!("set_language failed: {}", e);
-            return vec![];
-        }
-        let Some(tree) = parser.parse(content, None) else {
-            return vec![];
-        };
-        let Ok(query) = Query::new(&self.language, self.query_src) else {
-            tracing::error!("query compile failed for {}", file_path.display());
-            return vec![];
-        };
-
-        let bytes = content.as_bytes();
-        let mut cursor = QueryCursor::new();
-        let mut entities = Vec::new();
-
-        let mut matches =
-            cursor.matches(&query, tree.root_node(), |node: tree_sitter::Node<'_>| {
-                std::iter::once(&bytes[node.byte_range()])
-            });
-
-        while let Some(m) = matches.next() {
-            let mut name: Option<&str> = None;
-            let mut kind = "entity";
-            let mut definition: Option<tree_sitter::Node> = None;
-
-            for capture in m.captures {
-                let capture_name = query.capture_names()[capture.index as usize];
-                if capture_name == "name" {
-                    name = capture.node.utf8_text(bytes).ok();
-                } else if capture_name.starts_with('_') {
-                    // Вспомогательные capture'ы (@_attr, @_tag) — только для
-                    // предикатов #eq?/#match?, kind из них не берём.
-                } else {
-                    kind = capture_name;
-                    definition = Some(capture.node);
-                }
-            }
-
-            if let (Some(name), Some(def)) = (name, definition) {
-                entities.push(Entity {
-                    name: name.to_string(),
-                    kind: kind.to_string(),
-                    file_path: file_path.to_path_buf(),
-                    line: def.start_position().row as u32 + 1,
-                    code: def.utf8_text(bytes).ok().map(str::to_string),
-                });
-            }
-        }
-
-        entities
-    }
-}
-
-impl LanguageParser for TsParser {
-    fn parse(&self, content: &str, file_path: &Path) -> Vec<Entity> {
-        self.extract(content, file_path)
-    }
-}
-
-/// Выбор парсера по имени языка (см. scanner::SUPPORTED_LANGUAGES).
-pub fn by_language(language: &str) -> Option<Box<dyn LanguageParser>> {
+/// Извлечение сущностей из содержимого файла.
+///
+/// `language` — имя из [`crate::core::scanner::SUPPORTED_LANGUAGES`];
+/// для неподдерживаемого языка возвращается пустой список.
+pub fn parse(language: &str, content: &str, file_path: &Path) -> Vec<Entity> {
     use super::queries;
 
-    let parser = match language {
-        "python" => TsParser::new(tree_sitter_python::LANGUAGE.into(), queries::PYTHON_QUERY),
-        "rust" => TsParser::new(tree_sitter_rust::LANGUAGE.into(), queries::RUST_QUERY),
-        "javascript" => TsParser::new(
+    let (language, query_src) = match language {
+        "python" => (tree_sitter_python::LANGUAGE.into(), queries::PYTHON_QUERY),
+        "rust" => (tree_sitter_rust::LANGUAGE.into(), queries::RUST_QUERY),
+        "javascript" => (
             tree_sitter_javascript::LANGUAGE.into(),
             queries::JAVASCRIPT_QUERY,
         ),
-        "typescript" => TsParser::new(
+        "typescript" => (
             tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             queries::TYPESCRIPT_QUERY,
         ),
-        "html" => TsParser::new(tree_sitter_html::LANGUAGE.into(), queries::HTML_QUERY),
-        "css" => TsParser::new(tree_sitter_css::LANGUAGE.into(), queries::CSS_QUERY),
-        _ => return None,
+        "html" => (tree_sitter_html::LANGUAGE.into(), queries::HTML_QUERY),
+        "css" => (tree_sitter_css::LANGUAGE.into(), queries::CSS_QUERY),
+        _ => return Vec::new(),
     };
-    Some(Box::new(parser))
+
+    let mut parser = Parser::new();
+    if let Err(e) = parser.set_language(&language) {
+        tracing::error!("set_language failed: {}", e);
+        return vec![];
+    }
+    let Some(tree) = parser.parse(content, None) else {
+        return vec![];
+    };
+    let Ok(query) = Query::new(&language, query_src) else {
+        tracing::error!("query compile failed for {}", file_path.display());
+        return vec![];
+    };
+
+    let bytes = content.as_bytes();
+    let mut cursor = QueryCursor::new();
+    let mut entities = Vec::new();
+
+    let mut matches = cursor.matches(&query, tree.root_node(), |node: tree_sitter::Node<'_>| {
+        std::iter::once(&bytes[node.byte_range()])
+    });
+
+    while let Some(m) = matches.next() {
+        let mut name: Option<&str> = None;
+        let mut kind = "entity";
+        let mut definition: Option<tree_sitter::Node> = None;
+
+        for capture in m.captures {
+            let capture_name = query.capture_names()[capture.index as usize];
+            if capture_name == "name" {
+                name = capture.node.utf8_text(bytes).ok();
+            } else if capture_name.starts_with('_') {
+                // Вспомогательные capture'ы (@_attr, @_tag) — только для
+                // предикатов #eq?/#match?, kind из них не берём.
+            } else {
+                kind = capture_name;
+                definition = Some(capture.node);
+            }
+        }
+
+        if let (Some(name), Some(def)) = (name, definition) {
+            entities.push(Entity {
+                name: name.to_string(),
+                kind: kind.to_string(),
+                file_path: file_path.to_path_buf(),
+                line: def.start_position().row as u32 + 1,
+                code: def.utf8_text(bytes).ok().map(str::to_string),
+            });
+        }
+    }
+
+    entities
 }
 
 #[cfg(test)]
@@ -111,9 +88,8 @@ mod tests {
 
     #[test]
     fn parse_python_entities() {
-        let parser = by_language("python").unwrap();
         let code = "def hello(a, b):\n    return a + b\n\nclass Foo:\n    pass\n";
-        let entities = parser.parse(code, &PathBuf::from("test.py"));
+        let entities = parse("python", code, &PathBuf::from("test.py"));
         let names: Vec<_> = entities
             .iter()
             .map(|e| (e.name.as_str(), e.kind.as_str()))
@@ -124,9 +100,8 @@ mod tests {
 
     #[test]
     fn parse_rust_entities() {
-        let parser = by_language("rust").unwrap();
         let code = "struct Foo { x: u32 }\nfn bar() {}\nmod inner {}\n";
-        let entities = parser.parse(code, &PathBuf::from("test.rs"));
+        let entities = parse("rust", code, &PathBuf::from("test.rs"));
         let names: Vec<_> = entities
             .iter()
             .map(|e| (e.name.as_str(), e.kind.as_str()))
@@ -138,9 +113,8 @@ mod tests {
 
     #[test]
     fn parse_js_entities() {
-        let parser = by_language("javascript").unwrap();
         let code = "function run() {}\nclass App {}\nconst f = () => {};\n";
-        let entities = parser.parse(code, &PathBuf::from("test.js"));
+        let entities = parse("javascript", code, &PathBuf::from("test.js"));
         let names: Vec<_> = entities.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"run"));
         assert!(names.contains(&"App"));
@@ -149,7 +123,6 @@ mod tests {
 
     #[test]
     fn parse_html_entities_ids_and_title() {
-        let parser = by_language("html").unwrap();
         let code = r#"<!DOCTYPE html>
 <html>
 <head><title>Мой сайт</title></head>
@@ -160,7 +133,7 @@ mod tests {
 </body>
 </html>
 "#;
-        let entities = parser.parse(code, &PathBuf::from("index.html"));
+        let entities = parse("html", code, &PathBuf::from("index.html"));
 
         let main = entities
             .iter()
@@ -193,14 +166,13 @@ mod tests {
 
     #[test]
     fn parse_css_entities_classes_ids_keyframes() {
-        let parser = by_language("css").unwrap();
         let code = r#"
 .btn { color: red; }
 .card .title { font-weight: bold; }
 #header { margin: 0; }
 @keyframes spin { from { opacity: 0; } to { opacity: 1; } }
 "#;
-        let entities = parser.parse(code, &PathBuf::from("style.css"));
+        let entities = parse("css", code, &PathBuf::from("style.css"));
 
         let btn = entities
             .iter()
@@ -222,9 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn html_and_css_factories_are_wired() {
-        assert!(by_language("html").is_some());
-        assert!(by_language("css").is_some());
-        assert!(by_language("go").is_none());
+    fn unknown_language_returns_nothing() {
+        assert!(parse("go", "package main", &PathBuf::from("main.go")).is_empty());
     }
 }

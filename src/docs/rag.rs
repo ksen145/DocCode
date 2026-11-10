@@ -4,8 +4,10 @@
 //! семантическим поиском в Qdrant. Это одновременно уменьшает промпт и
 //! заставляет модель опираться на действительно релевантный код.
 
-use crate::ai::client::AiClient;
+use crate::ai::ollama::OllamaClient;
 use crate::core::model::ProjectModel;
+use crate::core::progress::ProgressCounters;
+use crate::index::qdrant_store::QdrantVectorStore;
 use crate::index::vector_store::VectorPoint;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -46,27 +48,15 @@ struct CodeChunk {
 pub struct IndexMeta {
     /// Размерность векторов.
     pub dimension: usize,
-    /// Количество проиндексированных чанков.
-    pub chunks: usize,
-    /// Модель эмбеддингов (для диагностики).
-    pub embedding_model: String,
 }
 
 /// Результат индексации.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexStats {
-    /// Размерность векторов.
-    pub dimension: usize,
     /// Проиндексировано чанков.
     pub chunks: usize,
-    /// Пропущено чанков (ошибка эмбеддинга).
-    pub skipped: usize,
     /// Файлов в проекте.
     pub files: usize,
-    /// Каталог индекса.
-    pub index_dir: String,
-    /// Бэкенд индекса.
-    pub backend: String,
 }
 
 /// Найденный векторный фрагмент.
@@ -118,35 +108,22 @@ pub fn load_meta(dir: &Path) -> Result<IndexMeta, String> {
     serde_json::from_str(&text).map_err(|e| format!("Некорректный meta.json индекса: {e}"))
 }
 
-/// Построение индекса: чанки → эмбеддинги → Qdrant (или in-memory fallback).
+/// Построение индекса: чанки → эмбеддинги → Qdrant.
 pub async fn build_index(
     model: &ProjectModel,
     root: &Path,
-    embedder: &dyn AiClient,
+    embedder: &OllamaClient,
     embedding_model: &str,
-) -> Result<IndexStats, String> {
-    build_index_with_progress(model, root, embedder, embedding_model, None).await
-}
-
-/// То же, что [`build_index`], но с отчётом о прогрессе индексации для UI.
-pub async fn build_index_with_progress(
-    model: &ProjectModel,
-    root: &Path,
-    embedder: &dyn AiClient,
-    embedding_model: &str,
-    progress: Option<&crate::core::progress::ProgressCounters>,
+    progress: &ProgressCounters,
 ) -> Result<IndexStats, String> {
     let chunks = make_chunks(model, root);
     if chunks.is_empty() {
         return Err("Не найдено ни одного фрагмента кода для индексации".to_string());
     }
     let total = chunks.len().min(MAX_CHUNKS);
-    if let Some(progress) = progress {
-        progress.set_index_total(total);
-    }
+    progress.set_index_total(total);
 
     let mut points = Vec::new();
-    let mut skipped = 0usize;
     let mut dimension = 0usize;
     let mut first_error: Option<String> = None;
 
@@ -157,13 +134,10 @@ pub async fn build_index_with_progress(
                     dimension = vector.len();
                 }
                 if vector.len() != dimension {
-                    skipped += 1;
                     first_error.get_or_insert_with(|| {
                         format!("размерность эмбеддинга {} != {}", vector.len(), dimension)
                     });
-                    if let Some(progress) = progress {
-                        progress.advance_index();
-                    }
+                    progress.advance_index();
                     continue;
                 }
                 points.push(VectorPoint {
@@ -174,17 +148,13 @@ pub async fn build_index_with_progress(
                 });
             }
             Ok(_) => {
-                skipped += 1;
                 first_error.get_or_insert_with(|| "пустой эмбеддинг".to_string());
             }
             Err(e) => {
-                skipped += 1;
                 first_error.get_or_insert(e);
             }
         }
-        if let Some(progress) = progress {
-            progress.advance_index();
-        }
+        progress.advance_index();
     }
 
     if points.is_empty() {
@@ -200,11 +170,8 @@ pub async fn build_index_with_progress(
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("Не удалось создать {}: {e}", dir.display()))?;
 
-    let meta = IndexMeta {
-        dimension,
-        chunks: points.len(),
-        embedding_model: embedding_model.to_string(),
-    };
+    let chunks_count = points.len();
+    let meta = IndexMeta { dimension };
 
     // Сначала записываем векторы, затем meta: при сбое не остаётся индекс,
     // который выглядит готовым, но не содержит данных.
@@ -216,12 +183,8 @@ pub async fn build_index_with_progress(
     .map_err(|e| format!("Не удалось записать meta.json: {e}"))?;
 
     Ok(IndexStats {
-        dimension,
-        chunks: meta.chunks,
-        skipped,
+        chunks: chunks_count,
         files: model.files.len(),
-        index_dir: dir.display().to_string(),
-        backend: backend_name().to_string(),
     })
 }
 
@@ -230,7 +193,7 @@ pub async fn build_index_with_progress(
 /// `allowed_files` ограничивает выдачу файлами компонента (для документации
 /// конкретного модуля), `limit` — общее число фрагментов после дедупликации.
 pub async fn retrieve(
-    embedder: &dyn AiClient,
+    embedder: &OllamaClient,
     root: &Path,
     queries: &[String],
     per_query: usize,
@@ -239,7 +202,7 @@ pub async fn retrieve(
 ) -> Result<Vec<RetrievedChunk>, String> {
     let dir = default_index_dir(root);
     let meta = load_meta(&dir)?;
-    let searcher = Searcher::open(&dir, meta.dimension)?;
+    let searcher = QdrantVectorStore::open(&dir, meta.dimension)?;
 
     let mut best: HashMap<String, RetrievedChunk> = HashMap::new();
     let mut failures = Vec::new();
@@ -460,67 +423,9 @@ fn reset_index(dir: &Path) -> Result<(), String> {
     }
 }
 
-fn backend_name() -> &'static str {
-    if cfg!(feature = "qdrant") {
-        "qdrant-edge"
-    } else {
-        "in-memory"
-    }
-}
-
-#[cfg(feature = "qdrant")]
 fn add_points(dir: &Path, dimension: usize, points: Vec<VectorPoint>) -> Result<(), String> {
-    use crate::index::qdrant_store::QdrantVectorStore;
     let mut store = QdrantVectorStore::open(dir, dimension)?;
     store.add_batch(points)
-}
-
-#[cfg(not(feature = "qdrant"))]
-fn add_points(dir: &Path, _dimension: usize, points: Vec<VectorPoint>) -> Result<(), String> {
-    use crate::index::vector_store::VectorStore;
-    let path = dir.join("index.json");
-    let mut store = VectorStore::load(&path);
-    store.add_batch(points)?;
-    store.save(&path)
-}
-
-/// Открытый один раз поисковый бэкенд.
-///
-/// Раньше индекс открывался на каждый запрос: для Qdrant Edge это означало
-/// повторную загрузку шарда и восстановление WAL (и шумные логи) на каждый
-/// из десятков запросов. Теперь [`retrieve`] открывает его однократно.
-enum Searcher {
-    #[cfg(feature = "qdrant")]
-    Qdrant(crate::index::qdrant_store::QdrantVectorStore),
-    #[cfg(not(feature = "qdrant"))]
-    Memory(crate::index::vector_store::VectorStore),
-}
-
-impl Searcher {
-    fn open(dir: &Path, dimension: usize) -> Result<Self, String> {
-        #[cfg(feature = "qdrant")]
-        {
-            Ok(Self::Qdrant(
-                crate::index::qdrant_store::QdrantVectorStore::open(dir, dimension)?,
-            ))
-        }
-        #[cfg(not(feature = "qdrant"))]
-        {
-            let _ = dimension;
-            Ok(Self::Memory(crate::index::vector_store::VectorStore::load(
-                dir.join("index.json"),
-            )))
-        }
-    }
-
-    fn search(&self, vector: &[f32], top_k: usize) -> Result<Vec<(VectorPoint, f32)>, String> {
-        match self {
-            #[cfg(feature = "qdrant")]
-            Self::Qdrant(store) => store.search(vector, top_k),
-            #[cfg(not(feature = "qdrant"))]
-            Self::Memory(store) => Ok(store.search(vector, top_k)),
-        }
-    }
 }
 
 #[cfg(test)]
