@@ -59,14 +59,14 @@ foreach ($step in $steps) {
     switch ($step) {
         'windows' {
             Write-Host '==> Windows: установщик'
-            $installerArgs = @()
-            if ($Version) { $installerArgs += @('-Version', $Version) }
-            if ($SkipBuild) { $installerArgs += '-SkipBuild' }
+            $installerArgs = @{}
+            if ($Version) { $installerArgs.Version = $Version }
+            if ($SkipBuild) { $installerArgs.SkipBuild = $true }
             if ($Sign) {
-                $installerArgs += '-Sign'
-                if ($PfxPath) { $installerArgs += @('-PfxPath', $PfxPath) }
-                if ($Thumbprint) { $installerArgs += @('-Thumbprint', $Thumbprint) }
-                if ($MachineStore) { $installerArgs += '-MachineStore' }
+                $installerArgs.Sign = $true
+                if ($PfxPath) { $installerArgs.PfxPath = $PfxPath }
+                if ($Thumbprint) { $installerArgs.Thumbprint = $Thumbprint }
+                if ($MachineStore) { $installerArgs.MachineStore = $true }
             }
             & (Join-Path $packagingDir 'windows\build-installer.ps1') @installerArgs
         }
